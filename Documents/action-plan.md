@@ -367,12 +367,11 @@ Create time-based splits for evaluation.
 Establish performance floors that all candidate models must beat.
 
 - [ ] Implement in `src/models/train.py`:
-  - **Baseline 1 — Majority class:** `DummyClassifier(strategy="most_frequent")`
-  - **Baseline 2 — Prior probability:** `DummyClassifier(strategy="prior")`
-  - **Baseline 3 — FIFA rank only:** `LogisticRegression` on `rank_diff` alone
+  - **Baseline 1 — Mean goals:** predict average home/away goals from training set for every match
+  - **Baseline 2 — FIFA rank only:** `PoissonRegressor` on `rank_diff` alone
+  - **Baseline 3 — Majority class:** `DummyClassifier(strategy="most_frequent")` for derived W/D/L comparison
   - **Baseline 4 — Betting odds** (if available): convert to implied probabilities
-- [ ] Evaluate each on the holdout test set
-- [ ] Record accuracy, log loss, and Brier score for each baseline
+- [ ] Evaluate each on the holdout test set using goal prediction metrics (MAE, RPS, exact scoreline accuracy) and derived outcome metrics (accuracy, log loss, Brier score)
 - [ ] Log results to `outputs/baseline_results.csv`
 
 **Deliverables:** baseline models in `src/models/train.py`, `outputs/baseline_results.csv`
@@ -381,17 +380,19 @@ Establish performance floors that all candidate models must beat.
 
 ### Step 3.3 — Candidate Model Training
 
-Train the core model candidates on the full feature set.
+Train the core model candidates on the full feature set. **Poisson goal models are the primary approach.**
 
 - [ ] Implement model definitions in `src/models/train.py`:
-  - **Logistic Regression** (with `StandardScaler`, `class_weight="balanced"`)
-  - **Random Forest** (`n_estimators=500, max_depth=8, class_weight="balanced_subsample"`)
-  - **XGBoost** (`objective="multi:softprob", num_class=3`, early stopping)
-  - **LightGBM** (`objective="multiclass", num_class=3, class_weight="balanced"`)
-  - **Poisson Regression** (two separate models for home/away goals, derive outcome probabilities via goal matrix)
+  - **Primary — Poisson Regression (linear):** two `PoissonRegressor` models (home goals, away goals) with `StandardScaler`
+  - **Primary — XGBoost Poisson:** two `XGBRegressor(objective="count:poisson")` models (home goals, away goals) with early stopping
+  - **Primary — LightGBM Poisson:** two `LGBMRegressor(objective="poisson")` models for comparison
+  - **Secondary — XGBoost Classifier:** `objective="multi:softprob", num_class=3` for direct W/D/L comparison
+  - **Secondary — Logistic Regression:** `class_weight="balanced"` as interpretable sanity check
+- [ ] For all Poisson models: train on `home_goals` and `away_goals` as separate targets
+- [ ] For all Poisson models: derive outcome probabilities via scoreline matrix for evaluation against classifiers
 - [ ] Train each model using `TimeSeriesSplit` CV with `sample_weight`
 - [ ] For XGBoost/LightGBM: use `eval_set` with early stopping (50 rounds)
-- [ ] Save each trained model to `artefacts/{model_name}.pkl`
+- [ ] Save each trained model pair to `artefacts/{model_name}_home.pkl` and `artefacts/{model_name}_away.pkl`
 - [ ] Log training time per model
 
 **Deliverables:** trained models in `artefacts/`, training logic in `src/models/train.py`
@@ -403,18 +404,19 @@ Train the core model candidates on the full feature set.
 Rigorously compare all models using multiple metrics.
 
 - [ ] Implement `src/models/evaluate.py`
-- [ ] For each model, compute on each CV fold and on the holdout test set:
-  - Accuracy
-  - Log Loss (primary metric)
-  - Brier Score (averaged across classes)
-  - Per-class Precision, Recall, F1
-  - Confusion matrix
-- [ ] Compute **overfitting diagnostic:** `test_log_loss - train_log_loss` (flag if > 0.15)
-- [ ] Compute **stage-stratified metrics:** report accuracy and log loss separately for group stage vs knockout
-- [ ] Produce comparison table: `outputs/model_comparison.csv`
+- [ ] For each Poisson model pair, compute on each CV fold and on the holdout test set:
+  - **Goal metrics (primary):** MAE per team, exact scoreline accuracy, Ranked Probability Score
+  - **Derived outcome metrics:** Accuracy (W/D/L), Log Loss, Brier Score
+  - Per-class Precision, Recall, F1 (on derived outcomes)
+  - Confusion matrix (on derived outcomes)
+- [ ] For each classifier model, compute the same outcome metrics for direct comparison
+- [ ] Compute **overfitting diagnostic:** `test_MAE - train_MAE` (flag if gap > 0.15)
+- [ ] Compute **stage-stratified metrics:** report metrics separately for group stage vs knockout
+- [ ] Produce comparison table: `outputs/model_comparison.csv` — unified table with goal and outcome metrics
 - [ ] Generate plots:
-  - Confusion matrix per model (`outputs/confusion_matrix_{model}.png`)
-  - Bar chart comparing log loss across models (`outputs/model_comparison_chart.png`)
+  - Predicted vs actual goal distribution histograms (`outputs/goal_distribution_{model}.png`)
+  - Confusion matrix per model on derived outcomes (`outputs/confusion_matrix_{model}.png`)
+  - Bar chart comparing MAE and log loss across models (`outputs/model_comparison_chart.png`)
 - [ ] Write unit tests for metric computation functions
 
 **Deliverables:** `src/models/evaluate.py`, `outputs/model_comparison.csv`, evaluation plots, `tests/unit/models/test_evaluate.py`
@@ -463,18 +465,20 @@ Optimise the top 1–2 models using Bayesian search.
 
 ### Step 3.7 — Probability Calibration
 
-Ensure predicted probabilities are trustworthy.
+Ensure predicted goal distributions and derived outcome probabilities are trustworthy.
 
 - [ ] Implement `src/models/calibrate.py`
 - [ ] Split training data into train + calibration sets (last 15% by date as calibration)
-- [ ] Train final model on the train portion
-- [ ] Apply `CalibratedClassifierCV(method="isotonic", cv="prefit")` using the calibration set
-- [ ] Generate calibration curves for all 3 classes: `outputs/calibration_curves.png`
-- [ ] Compare calibrated vs uncalibrated Brier scores
-- [ ] Save calibrated model: `artefacts/model_calibrated.pkl`
+- [ ] Train final Poisson model pair on the train portion
+- [ ] Calibrate the predicted λ values: compare predicted vs actual goal distributions, fit a bivariate Poisson correlation parameter (ρ) on the calibration set to correct draw probability
+- [ ] Generate calibration curves for derived W/D/L probabilities: `outputs/calibration_curves.png`
+- [ ] Generate predicted vs actual goal count comparison: `outputs/goal_calibration.png`
+- [ ] Compare calibrated vs uncalibrated Brier scores and RPS
+- [ ] Save calibrated models: `artefacts/model_home_calibrated.pkl`, `artefacts/model_away_calibrated.pkl`
+- [ ] Save bivariate correlation parameter: `artefacts/rho.json`
 - [ ] Save scaler: `artefacts/scaler.pkl`
 
-**Deliverables:** `src/models/calibrate.py`, `artefacts/model_calibrated.pkl`, `artefacts/scaler.pkl`, calibration plots
+**Deliverables:** `src/models/calibrate.py`, calibrated model artefacts, `artefacts/scaler.pkl`, calibration plots
 
 ---
 
@@ -498,44 +502,74 @@ Generate feature attributions for model transparency.
 
 ---
 
-### Step 3.9 — Ensemble Model
+### Step 3.9 — Ensemble & Final Model Selection
 
-Combine top performers for production stability.
+Select or combine the best Poisson model pair for production.
 
-- [ ] Build `VotingClassifier(voting="soft")` using the top 2–4 models from Step 3.4
-- [ ] Assign weights proportional to inverse log loss (better models get higher weight)
-- [ ] Evaluate ensemble on holdout test set; compare to best individual model
-- [ ] Only adopt ensemble if it improves log loss by >= 0.01 over the best single model; otherwise use the best single model
-- [ ] Calibrate the ensemble (repeat Step 3.7)
-- [ ] Save final production model: `artefacts/model_final.pkl`
+- [ ] Compare linear Poisson vs XGBoost Poisson vs LightGBM Poisson on holdout test set
+- [ ] If multiple Poisson variants are competitive: average their λ predictions (weighted by inverse MAE)
+- [ ] Optionally blend Poisson-derived outcome probabilities with direct classifier probabilities (weighted ensemble)
+- [ ] Only adopt ensemble if it improves MAE by >= 0.02 or RPS by >= 0.005 over the best single model pair
+- [ ] Calibrate the final model pair (repeat Step 3.7)
+- [ ] Save final production models: `artefacts/model_final_home.pkl`, `artefacts/model_final_away.pkl`
 
-**Deliverables:** ensemble logic in `src/models/train.py`, `artefacts/model_final.pkl`
+**Deliverables:** ensemble logic in `src/models/train.py`, final model artefacts
 
 ---
 
-### Step 3.10 — Production Readiness Checklist
+### Step 3.10 — Tournament Simulation
 
-Final validation before the model is used for real predictions.
+Build Monte Carlo simulation to predict group stage outcomes and knockout bracket probabilities.
+
+- [ ] Implement `src/models/simulate.py`
+- [ ] Implement `simulate_match(lambda_home, lambda_away, rho)`:
+  - Sample a scoreline from the bivariate Poisson distribution
+  - Return (home_goals, away_goals)
+- [ ] Implement `simulate_group_stage(group_teams, model_home, model_away, feature_store, n_sims=10000)`:
+  - For each simulation: play all group matches, compute points / GD / GS
+  - Apply FIFA tiebreaker rules (points → GD → GS → H2H → drawing of lots)
+  - Record which teams finish 1st, 2nd, 3rd in each simulation
+  - Return advancement probabilities per team
+- [ ] Implement `simulate_knockout(bracket, model_home, model_away, feature_store, n_sims=10000)`:
+  - Simulate each knockout match; if draw after 90 min, simulate extra time (inflate λ by 1/3) then penalty shootout (50/50)
+  - Track each team's probability of reaching QF, SF, Final, and winning
+- [ ] Implement `simulate_tournament(groups, model_home, model_away, feature_store, n_sims=10000)`:
+  - End-to-end: group stage → knockout → champion
+  - Return DataFrame with columns: `team, group_win_prob, advance_prob, qf_prob, sf_prob, final_prob, champion_prob`
+- [ ] Validate against WC 2022: simulate using pre-tournament data and compare advancement predictions to actual results
+- [ ] Save simulation results to `outputs/tournament_simulation.csv`
+- [ ] Generate bracket probability visualisation: `outputs/tournament_bracket.png`
+
+**Deliverables:** `src/models/simulate.py`, `outputs/tournament_simulation.csv`, bracket visualisation, `tests/unit/models/test_simulate.py`
+
+---
+
+### Step 3.11 — Production Readiness Checklist
+
+Final validation before the model is used for real predictions and tournament simulation.
 
 - [ ] Run checklist in `scripts/validate_model.py`:
   - No temporal leakage in train/test split ✓
-  - Model calibrated on held-out data ✓
+  - Poisson model pair calibrated on held-out data ✓
+  - Bivariate correlation parameter (ρ) fitted ✓
   - All features available at inference time (no post-match fields used) ✓
   - Missing value handling implemented (defaults defined) ✓
   - Scaler fitted on train only, saved to disk ✓
   - SHAP explainer saved to disk ✓
-  - Test performance within 0.05 log loss of CV performance ✓
-  - Predictions output as probabilities (sum to 1.0) ✓
+  - Test MAE within 0.05 of CV MAE ✓
+  - Derived outcome probabilities sum to 1.0 ✓
+  - Tournament simulation produces valid bracket probabilities ✓
   - Model version logged ✓
 - [ ] Implement `predict_match()` inference function in `src/models/train.py`:
   - Takes `home_team_id`, `away_team_id`, `league_id`, `match_date`
   - Builds feature row from processed data
-  - Returns `{"home_win": float, "draw": float, "away_win": float, "predicted": str}`
+  - Returns `{"lambda_home": float, "lambda_away": float, "most_likely_score": str, "home_win": float, "draw": float, "away_win": float}`
 - [ ] Test `predict_match()` on 5 known historical matches and verify output format
+- [ ] Test `simulate_tournament()` on WC 2022 data and verify output format
 - [ ] Save all final artefacts to `artefacts/`:
-  - `model_final.pkl`, `model_calibrated.pkl`, `scaler.pkl`
+  - `model_final_home.pkl`, `model_final_away.pkl`, `scaler.pkl`, `rho.json`
   - `shap_explainer.pkl`, `selected_features.pkl`
   - `model_comparison.csv`, `shap_feature_importance.csv`, `best_params.json`
-- [ ] Print final performance summary: best model name, test accuracy, test log loss, test Brier score vs baselines
+- [ ] Print final performance summary: best model pair name, test MAE, test RPS, exact scoreline accuracy, derived accuracy/log loss vs baselines
 
-**Deliverables:** `scripts/validate_model.py`, inference function, all artefacts saved, final summary report
+**Deliverables:** `scripts/validate_model.py`, inference function, tournament simulation, all artefacts saved, final summary report

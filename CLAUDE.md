@@ -1,8 +1,16 @@
-# Football Predictions National — World Cup Match Outcome Predictor
+# Football Predictions National — World Cup Score & Tournament Predictor
 
 ## Project Overview
 
-End-to-end production system for predicting national team football match outcomes (Win, Draw, Loss) with calibrated probabilities. Primary target: **FIFA World Cup 2026** (June–July 2026, USA/Canada/Mexico).
+End-to-end production system for predicting national team football match **scorelines** using Poisson-based goal models, with derived outcome probabilities and Monte Carlo tournament simulation. Primary target: **FIFA World Cup 2026** (June–July 2026, USA/Canada/Mexico).
+
+### Modelling Approach
+
+The system predicts **expected goals per team** (home λ, away λ) using independent Poisson regression models, then derives:
+
+1. **Scoreline probability matrix** — P(home=h, away=a) for all plausible scorelines
+2. **Outcome probabilities** — P(home win), P(draw), P(away win) by summing over the matrix
+3. **Tournament simulation** — Monte Carlo simulation of group stages (using predicted scores for goal difference / goals scored tiebreakers) and knockout rounds to estimate each team's probability of advancing to every stage
 
 ---
 
@@ -48,17 +56,19 @@ football-predictions-national/
 │   │   └── tournament.py       # In-tournament running features
 │   │
 │   ├── models/                 # Model training and evaluation
-│   │   ├── train.py            # Train all candidate models
+│   │   ├── train.py            # Train all candidate models (Poisson primary)
 │   │   ├── evaluate.py         # CV loop, metrics, comparison table
 │   │   ├── tune.py             # Optuna hyperparameter search
 │   │   ├── calibrate.py        # Post-hoc probability calibration
 │   │   ├── explain.py          # SHAP value computation and plots
-│   │   └── select.py           # Feature selection pipeline
+│   │   ├── select.py           # Feature selection pipeline
+│   │   └── simulate.py         # Monte Carlo tournament simulation
 │   │
 │   ├── api/                    # Prediction API (FastAPI)
 │   │   ├── main.py             # App entrypoint, CORS, lifespan
 │   │   ├── routes/
 │   │   │   ├── predictions.py  # POST /predict, GET /predictions/{fixture_id}
+│   │   │   ├── simulate.py     # POST /simulate/tournament
 │   │   │   ├── teams.py        # GET /teams, GET /teams/{id}
 │   │   │   └── health.py       # GET /health
 │   │   ├── models.py           # Request/response Pydantic schemas
@@ -129,19 +139,30 @@ football-predictions-national/
 
 1. **Data Pipeline** — API client, historical fixtures (1990–present), raw storage, fixtures DB
 2. **Feature Engineering** — rolling stats, squad aggregates, H2H, tournament features, leakage validation
-3. **Model Training** — candidate models, time-series CV, Optuna tuning, calibration, SHAP
-4. **Prediction API** — FastAPI serving predictions with model + feature store
-5. **UI** — Angular frontend + Node.js BFF with match cards, SHAP charts, tournament view
-6. **AWS Deployment** — CDK stacks, CI/CD, monitoring
-7. **Tournament Mode** — daily data refresh, live predictions, accuracy tracking during WC 2026
+3. **Model Training** — Poisson goal models (primary), classification models (secondary), time-series CV, Optuna tuning, calibration, SHAP
+4. **Tournament Simulation** — Monte Carlo group stage simulation with tiebreakers, knockout bracket probabilities
+5. **Prediction API** — FastAPI serving scoreline predictions, outcome probabilities, and tournament simulations
+6. **UI** — Angular frontend + Node.js BFF with match cards, scoreline matrix, SHAP charts, tournament bracket view
+7. **AWS Deployment** — CDK stacks, CI/CD, monitoring
+8. **Tournament Mode** — daily data refresh, live predictions, simulation updates, accuracy tracking during WC 2026
 
 ---
 
 ## Benchmark Targets
 
+### Goal Prediction (Poisson Models — Primary)
+
 | Metric | Naive Baseline | Good | Excellent |
 |---|---|---|---|
-| Accuracy | ~45% | ~52% | ~57% |
+| MAE (goals per team) | ~1.2 | ~0.95 | ~0.85 |
+| Exact scoreline accuracy | ~10% | ~18% | ~25% |
+| Ranked Probability Score | ~0.24 | ~0.20 | ~0.17 |
+
+### Derived Outcome Probabilities
+
+| Metric | Naive Baseline | Good | Excellent |
+|---|---|---|---|
+| Accuracy (W/D/L) | ~45% | ~52% | ~57% |
 | Log Loss | ~1.05 | ~0.95 | ~0.88 |
 | Brier Score | ~0.24 | ~0.21 | ~0.19 |
 

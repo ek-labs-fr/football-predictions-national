@@ -1,6 +1,6 @@
 # World Cup ML Prediction — Data Pipeline Guide
 
-> How to pull and structure data from API-Football (v3) to train a match outcome prediction model.
+> How to pull and structure data from API-Football (v3) to train Poisson-based goal prediction models and derive scoreline/outcome probabilities.
 
 ---
 
@@ -22,16 +22,23 @@
 
 ## Overview
 
-The goal is to build one **flat row per match** where each row contains features describing both teams *before* the match was played, plus the match outcome as the label. Every API call below feeds one or more columns in that final table.
+The goal is to build one **flat row per match** where each row contains features describing both teams *before* the match was played, plus goal counts as labels. Every API call below feeds one or more columns in that final table.
 
-**Target variable options:**
+**Target variables (primary — Poisson goal models):**
 
 | Label | Type | Notes |
 |---|---|---|
-| `outcome` | 3-class (W/D/L) | From home team perspective |
-| `goal_diff` | Integer regression | Home goals − Away goals |
-| `home_goals` | Integer regression | Predict both separately |
-| `away_goals` | Integer regression | Combine for scoreline |
+| `home_goals` | Integer (count) | Primary target for home Poisson model |
+| `away_goals` | Integer (count) | Primary target for away Poisson model |
+
+**Derived outputs (computed from predicted λ values):**
+
+| Output | How | Notes |
+|---|---|---|
+| Scoreline matrix | P(h,a) = Poisson(h;λ_home) × Poisson(a;λ_away) | Full probability grid |
+| `outcome` | Sum over matrix diagonals | W/D/L probabilities |
+| `goal_diff` | λ_home − λ_away | Expected goal difference |
+| Most likely scoreline | argmax P(h,a) | Point prediction |
 
 **Data sources required:**
 
@@ -150,7 +157,7 @@ From each fixture response, extract and store:
 }
 ```
 
-> **Label derivation:** `outcome = home_win / draw / away_win` from `winner`. `goal_diff = home_goals - away_goals`.
+> **Label derivation:** `home_goals` and `away_goals` are the primary training targets for the Poisson models. `outcome = home_win / draw / away_win` and `goal_diff = home_goals - away_goals` are derived for evaluation.
 
 ---
 

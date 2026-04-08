@@ -2,7 +2,9 @@
 
 > Which models to train, how to evaluate them rigorously, how to select the best features,
 > and how to explain predictions using SHAP values.
-> Assumes features are clean and assembled per `worldcup-ml-feature-engineering.md`.
+> **Primary approach:** Poisson-based goal prediction models that predict expected goals per team,
+> then derive scoreline probabilities and W/D/L outcomes via a goal matrix.
+> Assumes features are clean and assembled per `worldcup-ml-data-pipeline.md`.
 
 ---
 
@@ -25,15 +27,20 @@
 
 Predicting football matches is a **low-signal, high-noise problem**. Even the best models in the world rarely exceed 55–60% accuracy on match outcomes — upsets are real, variance is high, and football is designed to be unpredictable. The goal is not to be perfect, but to be **systematically better than a naive baseline** and to understand *why* the model makes each prediction.
 
-**Three modelling objectives to keep in mind:**
+**Primary modelling approach — Poisson goal prediction:**
 
-| Objective | Approach |
+The system predicts **expected goals per team** (λ_home, λ_away) using independent Poisson regression models. From these, all other outputs are derived:
+
+| Output | Derivation |
 |---|---|
-| Classification | Predict outcome: home win / draw / away win |
-| Regression | Predict goal difference or individual scoreline |
-| Probability calibration | Output well-calibrated win probabilities per class |
+| Scoreline probability matrix | P(h,a) = Poisson(h; λ_home) × Poisson(a; λ_away) |
+| W/D/L probabilities | Sum over matrix: P(win) = Σ P(h,a) where h>a, etc. |
+| Most likely scoreline | argmax over the matrix |
+| Expected goal difference | λ_home − λ_away |
 
-Run all three. Classification metrics tell you about ranking accuracy; regression metrics tell you about magnitude accuracy; calibration tells you whether the model's confidence is trustworthy — essential if predictions are used to inform decisions.
+This approach is preferred because: (1) it respects the discrete count nature of goals, (2) it produces a full scoreline distribution needed for tournament simulation (goal difference tiebreakers), and (3) it is the standard in professional football analytics.
+
+**Secondary models** (classification-based XGBoost/LightGBM predicting W/D/L directly) are trained for comparison and potential ensembling, but the Poisson models are the primary production system.
 
 **Tooling:**
 
@@ -234,9 +241,11 @@ lgbm_model = LGBMClassifier(
 
 ---
 
-### Model 5 — Poisson Regression (for Scoreline Prediction)
+### Model 5 — Poisson Goal Models (PRIMARY)
 
-Football goals follow a Poisson distribution. Rather than predicting outcomes directly, model the expected goals for each team separately and derive outcome probabilities analytically. This is the approach used by most professional football modelling systems.
+Football goals follow a Poisson distribution. This is the **primary production model**: predict expected goals for each team separately and derive scoreline probabilities, outcome probabilities, and tournament simulations from the goal distributions. This is the approach used by most professional football modelling systems (FiveThirtyEight, Opta, etc.).
+
+#### 5a. Basic Poisson Regression
 
 ```python
 from sklearn.linear_model import PoissonRegressor
@@ -247,27 +256,94 @@ poisson_away = PoissonRegressor(alpha=0.1, max_iter=300)
 
 poisson_home.fit(X_train_scaled, y_train_home_goals)
 poisson_away.fit(X_train_scaled, y_train_away_goals)
-
-# Derive outcome probabilities from predicted goal distributions
-from scipy.stats import poisson
-
-def goal_matrix_to_probs(lambda_home, lambda_away, max_goals=10):
-    """Convert expected goals to win/draw/loss probabilities."""
-    home_probs = [poisson.pmf(g, lambda_home) for g in range(max_goals + 1)]
-    away_probs = [poisson.pmf(g, lambda_away) for g in range(max_goals + 1)]
-
-    p_home_win, p_draw, p_away_win = 0, 0, 0
-    for h in range(max_goals + 1):
-        for a in range(max_goals + 1):
-            p = home_probs[h] * away_probs[a]
-            if h > a:   p_home_win += p
-            elif h == a: p_draw    += p
-            else:        p_away_win += p
-
-    return p_home_win, p_draw, p_away_win
 ```
 
-**When it wins:** When scoreline prediction is the primary objective or when you want well-calibrated probabilities that respect the discrete nature of goals.
+#### 5b. Gradient Boosted Poisson (stronger variant)
+
+Use XGBoost/LightGBM with Poisson loss for non-linear goal prediction:
+
+```python
+from xgboost import XGBRegressor
+
+xgb_poisson_home = XGBRegressor(
+    objective="count:poisson",
+    n_estimators=500,
+    learning_rate=0.05,
+    max_depth=5,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    reg_alpha=0.1,
+    reg_lambda=1.0,
+    random_state=42,
+    n_jobs=-1,
+)
+xgb_poisson_away = XGBRegressor(
+    objective="count:poisson",
+    n_estimators=500,
+    learning_rate=0.05,
+    max_depth=5,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    reg_alpha=0.1,
+    reg_lambda=1.0,
+    random_state=42,
+    n_jobs=-1,
+)
+
+xgb_poisson_home.fit(X_train, y_train_home_goals, eval_set=[(X_val, y_val_home_goals)],
+                      early_stopping_rounds=50, verbose=False)
+xgb_poisson_away.fit(X_train, y_train_away_goals, eval_set=[(X_val, y_val_away_goals)],
+                      early_stopping_rounds=50, verbose=False)
+```
+
+#### 5c. Scoreline Probability Matrix
+
+```python
+from scipy.stats import poisson
+import numpy as np
+
+def scoreline_matrix(lambda_home, lambda_away, max_goals=8):
+    """Build full scoreline probability matrix from predicted λ values."""
+    matrix = np.zeros((max_goals + 1, max_goals + 1))
+    for h in range(max_goals + 1):
+        for a in range(max_goals + 1):
+            matrix[h, a] = poisson.pmf(h, lambda_home) * poisson.pmf(a, lambda_away)
+    return matrix
+
+def matrix_to_outcome_probs(matrix):
+    """Sum scoreline matrix to get W/D/L probabilities."""
+    p_home_win = np.triu(matrix, k=1).sum()   # above diagonal
+    p_draw = np.trace(matrix)                   # diagonal
+    p_away_win = np.tril(matrix, k=-1).sum()   # below diagonal
+    return p_home_win, p_draw, p_away_win
+
+def most_likely_scoreline(matrix):
+    """Return the most probable scoreline."""
+    idx = np.unravel_index(matrix.argmax(), matrix.shape)
+    return idx[0], idx[1], matrix[idx]
+```
+
+#### 5d. Bivariate Poisson (handling goal correlation)
+
+Independent Poisson assumes home and away goals are uncorrelated. In practice, there is weak positive correlation (open games produce more goals for both sides). A bivariate Poisson or copula-based correction can improve calibration:
+
+```python
+def bivariate_poisson_matrix(lambda_home, lambda_away, rho=0.1, max_goals=8):
+    """
+    Approximate bivariate Poisson via diagonal inflation.
+    rho > 0 increases draw probability (positive goal correlation).
+    """
+    matrix = scoreline_matrix(lambda_home, lambda_away, max_goals)
+    # Inflate diagonal (draws) by rho factor
+    for g in range(max_goals + 1):
+        inflation = rho * poisson.pmf(g, (lambda_home + lambda_away) / 2)
+        matrix[g, g] += inflation
+    # Re-normalise
+    matrix /= matrix.sum()
+    return matrix
+```
+
+**Why this is the primary model:** It produces exact score predictions needed for group stage simulation (goal difference, goals scored tiebreakers), naturally outputs calibrated probabilities, and is the industry standard for football prediction.
 
 ---
 
@@ -497,12 +573,34 @@ print(classification_report(
 ))
 ```
 
-### Regression Metrics (for goal prediction)
+### Goal Prediction Metrics (Primary — Poisson Models)
 
 ```python
-mae  = mean_absolute_error(y_test_goals, y_pred_goals)
-rmse = np.sqrt(mean_squared_error(y_test_goals, y_pred_goals))
-print(f"MAE: {mae:.3f} goals | RMSE: {rmse:.3f} goals")
+# MAE on predicted goals per team
+mae_home = mean_absolute_error(y_test_home_goals, lambda_home_pred)
+mae_away = mean_absolute_error(y_test_away_goals, lambda_away_pred)
+print(f"MAE Home: {mae_home:.3f} goals | MAE Away: {mae_away:.3f} goals")
+
+# Exact scoreline accuracy
+predicted_scorelines = [(round(lh), round(la)) for lh, la in zip(lambda_home_pred, lambda_away_pred)]
+actual_scorelines = list(zip(y_test_home_goals, y_test_away_goals))
+exact_acc = sum(p == a for p, a in zip(predicted_scorelines, actual_scorelines)) / len(actual_scorelines)
+print(f"Exact scoreline accuracy: {exact_acc:.3f}")
+
+# Ranked Probability Score (RPS) — measures how close the predicted
+# cumulative distribution is to the actual outcome
+def ranked_probability_score(y_true_goals, lambda_pred, max_goals=8):
+    """RPS for a single team's goal prediction."""
+    from scipy.stats import poisson
+    rps_list = []
+    for actual, lam in zip(y_true_goals, lambda_pred):
+        cum_pred = np.cumsum([poisson.pmf(g, lam) for g in range(max_goals + 1)])
+        cum_true = np.cumsum([1 if g >= actual else 0 for g in range(max_goals + 1)])
+        rps_list.append(np.mean((cum_pred - cum_true) ** 2))
+    return np.mean(rps_list)
+
+rps = ranked_probability_score(y_test_home_goals, lambda_home_pred)
+print(f"RPS (home goals): {rps:.4f}")
 ```
 
 ### Calibration Curve
@@ -1014,15 +1112,20 @@ print("✅  All artefacts saved to /artefacts/")
 
 ### Inference Template
 
-A clean function to call the model on a single future match:
+A clean function to call the Poisson models on a single future match:
 
 ```python
 def predict_match(home_team_id, away_team_id, league_id, match_date,
-                  feature_store, model, scaler, selected_features):
+                  feature_store, model_home, model_away, scaler, selected_features,
+                  rho=0.1, max_goals=8):
     """
-    Predict outcome probabilities for a single upcoming match.
+    Predict scoreline probabilities for a single upcoming match.
 
-    Returns dict with keys: home_win, draw, away_win (probabilities summing to 1).
+    Returns dict with:
+      - lambda_home, lambda_away: expected goals per team
+      - scoreline_matrix: full probability grid
+      - most_likely_score: (home_goals, away_goals)
+      - home_win, draw, away_win: outcome probabilities (summing to 1)
     """
     # 1. Build feature row from pre-computed feature store
     row = feature_store.get_match_features(
@@ -1035,17 +1138,28 @@ def predict_match(home_team_id, away_team_id, league_id, match_date,
     # 3. Handle missing values
     X = X.fillna(X.median())
 
-    # 4. Scale
-    X_scaled = scaler.transform(X)
+    # 4. Scale (if using linear Poisson; skip for XGBoost Poisson)
+    X_input = scaler.transform(X) if scaler else X
 
-    # 5. Predict
-    proba = model.predict_proba(X_scaled)[0]
+    # 5. Predict expected goals
+    lambda_home = float(model_home.predict(X_input)[0])
+    lambda_away = float(model_away.predict(X_input)[0])
+
+    # 6. Build scoreline matrix (with bivariate correction)
+    matrix = bivariate_poisson_matrix(lambda_home, lambda_away, rho, max_goals)
+
+    # 7. Derive outputs
+    p_home, p_draw, p_away = matrix_to_outcome_probs(matrix)
+    best_h, best_a, best_p = most_likely_scoreline(matrix)
 
     return {
-        "away_win":  round(float(proba[0]), 4),
-        "draw":      round(float(proba[1]), 4),
-        "home_win":  round(float(proba[2]), 4),
-        "predicted": ["away_win", "draw", "home_win"][np.argmax(proba)],
+        "lambda_home":       round(lambda_home, 3),
+        "lambda_away":       round(lambda_away, 3),
+        "most_likely_score": f"{best_h}-{best_a}",
+        "score_probability": round(float(best_p), 4),
+        "home_win":          round(float(p_home), 4),
+        "draw":              round(float(p_draw), 4),
+        "away_win":          round(float(p_away), 4),
     }
 
 # Example
@@ -1055,12 +1169,14 @@ result = predict_match(
     league_id=1,          # World Cup
     match_date=pd.Timestamp("2026-07-19"),
     feature_store=feature_store,
-    model=calibrated_model,
+    model_home=poisson_home,
+    model_away=poisson_away,
     scaler=scaler,
     selected_features=selected_features
 )
 print(result)
-# → {'away_win': 0.312, 'draw': 0.268, 'home_win': 0.420, 'predicted': 'home_win'}
+# → {'lambda_home': 1.42, 'lambda_away': 1.18, 'most_likely_score': '1-1',
+#     'score_probability': 0.1283, 'home_win': 0.420, 'draw': 0.268, 'away_win': 0.312}
 ```
 
 ---
@@ -1069,23 +1185,32 @@ print(result)
 
 ### Metric Targets (Rough Benchmarks for International Football)
 
+#### Goal Prediction (Primary — Poisson Models)
+
 | Metric | Naive Baseline | Good Model | Excellent Model |
 |---|---|---|---|
-| Accuracy | ~45% | ~52% | ~57% |
+| MAE (goals/team) | ~1.2 | ~0.95 | ~0.85 |
+| Exact scoreline accuracy | ~10% | ~18% | ~25% |
+| Ranked Probability Score | ~0.24 | ~0.20 | ~0.17 |
+
+#### Derived Outcome Probabilities
+
+| Metric | Naive Baseline | Good Model | Excellent Model |
+|---|---|---|---|
+| Accuracy (W/D/L) | ~45% | ~52% | ~57% |
 | Log Loss | ~1.05 | ~0.95 | ~0.88 |
 | Brier Score | ~0.24 | ~0.21 | ~0.19 |
 
 ### Model Selection Summary
 
-| Model | Strengths | When to Choose |
+| Model | Role | Strengths |
 |---|---|---|
-| Logistic Regression | Interpretable, fast, calibrated | Sanity check, small data |
-| Random Forest | Robust, handles missing values | Strong baseline |
-| XGBoost | Best accuracy, regularisable | Primary production model |
-| LightGBM | Fastest, similar to XGBoost | Hyperparameter search, large data |
-| Poisson Regression | Principled goal model, interpretable | Scoreline prediction |
-| MLP | Captures complex patterns | Large dataset (5k+ rows) only |
-| Voting Ensemble | Reduced variance, robust | Final production when stability matters |
+| **XGBoost Poisson (home/away)** | **Primary production model** | Non-linear goal prediction, scoreline matrix, tournament simulation |
+| Poisson Regression (linear) | Interpretable baseline | Fast, principled, good calibration check |
+| XGBoost Classifier | Secondary / ensemble | Direct W/D/L, strong accuracy |
+| LightGBM Classifier | Secondary / ensemble | Fast tuning, comparison |
+| Logistic Regression | Sanity check | Interpretable, fast |
+| Voting Ensemble | Production stability | Reduced variance across Poisson + classifier |
 
 ### Output Files
 

@@ -78,9 +78,9 @@ ui/
 
 | Page | Route | Description |
 |---|---|---|
-| Dashboard | `/` | Upcoming matches with predicted outcomes, confidence bars |
-| Match Detail | `/match/:id` | Full prediction breakdown, SHAP waterfall, H2H, team form |
-| Tournament | `/tournament` | Bracket and group tables with predictions overlaid |
+| Dashboard | `/` | Upcoming matches with predicted scorelines, outcome probabilities, confidence bars |
+| Match Detail | `/match/:id` | Scoreline probability matrix, SHAP waterfall, H2H, team form |
+| Tournament | `/tournament` | Group tables with advancement probabilities, knockout bracket with progression odds |
 | Performance | `/performance` | Historical accuracy, calibration curves, model comparison |
 | About | `/about` | Methodology and data source explanation |
 
@@ -92,13 +92,15 @@ All feature routes are **lazy-loaded** via Angular Router.
 
 | Component | Purpose |
 |---|---|
-| `MatchCardComponent` | Team flags, predicted probabilities as stacked bar, outcome badge |
-| `PredictionPanelComponent` | Win/draw/loss probability with confidence indicator |
-| `ShapWaterfallComponent` | Interactive chart showing which features drove the prediction |
+| `MatchCardComponent` | Team flags, predicted scoreline, outcome probabilities as stacked bar |
+| `ScorelineMatrixComponent` | Heatmap grid showing probability of each scoreline (e.g., 1-0, 2-1) |
+| `PredictionPanelComponent` | Expected goals (λ), most likely score, W/D/L probability bars |
+| `ShapWaterfallComponent` | Interactive chart showing which features drove the goal prediction |
 | `FormStripComponent` | W/D/L form displayed as coloured circles |
 | `H2HSummaryComponent` | Head-to-head record mini table |
 | `CalibrationChartComponent` | Calibration curve visualisation |
-| `BracketViewComponent` | Tournament knockout bracket with predicted winners |
+| `GroupSimulationComponent` | Group table with each team's advancement probability from Monte Carlo simulation |
+| `BracketViewComponent` | Tournament knockout bracket with progression probabilities per team |
 
 ---
 
