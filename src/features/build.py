@@ -40,6 +40,7 @@ _COMP_WEIGHT: dict[int, float] = {
 }
 
 _DEFAULT_RANK = 150  # for teams without a FIFA ranking
+_DEFAULT_ELO = 1300  # approximate average Elo rating for unrated teams
 
 
 # ------------------------------------------------------------------
@@ -112,6 +113,55 @@ def add_fifa_rankings(
 
 
 # ------------------------------------------------------------------
+# Elo Ratings
+# ------------------------------------------------------------------
+
+
+def _load_elo_ratings(path: str | Path = EXTERNAL_DIR / "elo_ratings.csv") -> pd.DataFrame:
+    """Load Elo ratings and prepare for lookup."""
+    path = Path(path)
+    if not path.exists():
+        logger.warning("Elo ratings file not found at %s — Elo features will be null", path)
+        return pd.DataFrame(columns=["team_id", "elo_rating", "elo_date"])
+    df = pd.read_csv(path)
+    df["elo_date"] = pd.to_datetime(df["elo_date"], utc=True)
+    return df.sort_values("elo_date")
+
+
+def _lookup_elo(team_id: int, match_date: pd.Timestamp, elo_df: pd.DataFrame) -> float:
+    """Find the most recent Elo rating for a team before the match date."""
+    mask = (elo_df["team_id"] == team_id) & (elo_df["elo_date"] <= match_date)
+    matches = elo_df.loc[mask]
+    if matches.empty:
+        return _DEFAULT_ELO
+    return float(matches.iloc[-1]["elo_rating"])
+
+
+def add_elo_ratings(
+    fixtures: pd.DataFrame,
+    elo_path: str | Path = EXTERNAL_DIR / "elo_ratings.csv",
+) -> pd.DataFrame:
+    """Add Elo rating columns to fixtures."""
+    elo = _load_elo_ratings(elo_path)
+    df = fixtures.copy()
+    df["date"] = pd.to_datetime(df["date"], utc=True)
+
+    if elo.empty:
+        df["home_elo"] = _DEFAULT_ELO
+        df["away_elo"] = _DEFAULT_ELO
+    else:
+        df["home_elo"] = df.apply(
+            lambda r: _lookup_elo(int(r["home_team_id"]), r["date"], elo),
+            axis=1,
+        )
+        df["away_elo"] = df.apply(
+            lambda r: _lookup_elo(int(r["away_team_id"]), r["date"], elo),
+            axis=1,
+        )
+    return df
+
+
+# ------------------------------------------------------------------
 # Step 2.7 — Assemble Flat Training Table
 # ------------------------------------------------------------------
 
@@ -123,6 +173,7 @@ def build_training_table(
     h2h_path: str | Path = PROCESSED_DIR / "features_h2h.csv",
     tournament_path: str | Path = PROCESSED_DIR / "features_tournament.csv",
     rankings_path: str | Path = EXTERNAL_DIR / "fifa_rankings.csv",
+    elo_path: str | Path = EXTERNAL_DIR / "elo_ratings.csv",
     output_path: str | Path = PROCESSED_DIR / "training_table.csv",
 ) -> pd.DataFrame:
     """Join all feature sources into a single row-per-match training table.
@@ -143,6 +194,9 @@ def build_training_table(
 
     # FIFA rankings (Step 2.6)
     df = add_fifa_rankings(df, rankings_path)
+
+    # Elo ratings
+    df = add_elo_ratings(df, elo_path)
 
     # Rolling features — join for home and away teams
     rolling_path = Path(rolling_path)
@@ -235,6 +289,8 @@ def build_training_table(
             df["home_goals_scored_avg_l10"] - df["away_goals_scored_avg_l10"]
         )
     df["rank_diff"] = df["home_fifa_rank"] - df["away_fifa_rank"]
+    if "home_elo" in df.columns:
+        df["elo_diff"] = df["home_elo"] - df["away_elo"]
     if "home_squad_avg_rating" in df.columns:
         df["squad_rating_diff"] = df["home_squad_avg_rating"] - df["away_squad_avg_rating"]
     if "home_top5_league_ratio" in df.columns:
