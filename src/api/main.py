@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.dependencies import get_feature_store, get_model_store
+from src.api.predictions_store import get_predictions_store
 from src.api.routes import health, predictions, simulate, teams
 
 logging.basicConfig(
@@ -34,6 +35,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     feature_store = get_feature_store()
     feature_store.load()
     logger.info("Feature store loaded (%d teams)", len(feature_store.team_lookup))
+
+    logger.info("Loading predictions store...")
+    pred_store = get_predictions_store()
+    pred_store.load(
+        model_home=model_store.model_home,
+        model_away=model_store.model_away,
+        scaler=model_store.scaler,
+        selected_features=model_store.selected_features or None,
+    )
+    logger.info("Predictions store loaded (%d matches)", len(pred_store.matches))
 
     yield
 

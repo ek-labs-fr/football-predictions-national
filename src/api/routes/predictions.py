@@ -9,11 +9,11 @@ from src.api.dependencies import FeatureStore, ModelStore, get_feature_store, ge
 from src.api.models import (
     MatchListResponse,
     MatchResultResponse,
-    PerformanceSummaryResponse,
     PredictRequest,
     PredictResponse,
     ScorelineProbability,
 )
+from src.api.predictions_store import PredictionsStore, get_predictions_store
 from src.models.train import predict_match, scoreline_matrix
 
 router = APIRouter(tags=["predictions"])
@@ -76,30 +76,19 @@ def predict(
 
 @router.get("/matches", response_model=MatchListResponse)
 def list_matches(
-    feature_store: FeatureStore = Depends(get_feature_store),
+    pred_store: PredictionsStore = Depends(get_predictions_store),
 ) -> MatchListResponse:
     """List all matches with predicted and actual scores, plus running performance."""
-    # Placeholder — in production this reads from the predictions store.
-    # Returns empty list when no predictions have been generated yet.
-    return MatchListResponse(
-        matches=[],
-        performance=PerformanceSummaryResponse(
-            total_matches=0,
-            completed_matches=0,
-            correct_outcomes=0,
-            correct_scores=0,
-            outcome_accuracy=0.0,
-            score_accuracy=0.0,
-            avg_mae=0.0,
-        ),
-    )
+    return pred_store.get_response()
 
 
 @router.get("/matches/{fixture_id}", response_model=MatchResultResponse)
 def get_match(
     fixture_id: int,
-    feature_store: FeatureStore = Depends(get_feature_store),
+    pred_store: PredictionsStore = Depends(get_predictions_store),
 ) -> MatchResultResponse:
     """Get a single match prediction by fixture ID."""
-    # Placeholder — will be populated when predictions are generated
-    raise HTTPException(status_code=404, detail=f"Match {fixture_id} not found")
+    match = pred_store.get_match(fixture_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail=f"Match {fixture_id} not found")
+    return match
