@@ -1,0 +1,15 @@
+{
+  "fixture": {"id": 855748, "referee": "S. Marciniak", "timezone": "UTC", "date": "2022-12-18T15:00:00+00:00", "timestamp": 1671375600},
+  "league": {"id": 1, "name": "World Cup", "country": "World", "logo": null, "flag": null, "season": 2022, "round": "Final"},
+  "teams": {
+    "home": {"id": 26, "name": "Argentina", "logo": null, "winner": true},
+    "away": {"id": 2, "name": "France", "logo": null, "winner": false}
+  },
+  "goals": {"home": 3, "away": 3},
+  "score": {
+    "halftime": {"home": 2, "away": 0},
+    "fulltime": {"home": 2, "away": 2},
+    "extratime": {"home": 1, "away": 1},
+    "penalty": {"home": 4, "away": 2}
+  }
+}

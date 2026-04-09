@@ -1,0 +1,8 @@
+{
+  "league": {"id": 1, "name": "World Cup", "type": "Cup", "logo": "https://media.api-sports.io/football/leagues/1.png"},
+  "country": {"name": "World", "code": null, "flag": null},
+  "seasons": [
+    {"year": 2022, "start": "2022-11-20", "end": "2022-12-18", "current": false},
+    {"year": 2026, "start": "2026-06-11", "end": "2026-07-19", "current": true}
+  ]
+}

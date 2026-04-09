@@ -1,0 +1,12 @@
+{
+  "player": {"id": 276, "name": "K. Mbappé", "firstname": "Kylian", "lastname": "Mbappé", "age": 24, "nationality": "France", "height": "178 cm", "weight": "73 kg", "photo": null},
+  "statistics": [
+    {
+      "team": {"id": 2, "name": "France"},
+      "league": {"id": 1, "name": "World Cup", "country": "World", "season": 2022},
+      "games": {"appearences": 7, "lineups": 7, "minutes": 630, "position": "Attacker", "rating": "7.8"},
+      "goals": {"total": 8, "conceded": null, "assists": 2},
+      "cards": {"yellow": 1, "red": 0}
+    }
+  ]
+}

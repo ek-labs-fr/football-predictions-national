@@ -1,0 +1,4 @@
+{
+  "team": {"id": 2, "name": "France", "code": "FRA", "country": "France", "founded": 1919, "national": true, "logo": "https://media.api-sports.io/football/teams/2.png"},
+  "venue": {"id": 658, "name": "Stade de France", "city": "Saint-Denis", "capacity": 81338}
+}

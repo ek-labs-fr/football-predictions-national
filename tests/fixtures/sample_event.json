@@ -1,0 +1,9 @@
+{
+  "time": {"elapsed": 23, "extra": null},
+  "team": {"id": 26, "name": "Argentina", "logo": null},
+  "player": {"id": 152, "name": "L. Messi"},
+  "assist": {"id": null, "name": null},
+  "type": "Goal",
+  "detail": "Normal Goal",
+  "comments": null
+}
