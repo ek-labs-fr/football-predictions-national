@@ -133,15 +133,45 @@ def map_rankings(rankings: pd.DataFrame, team_lookup: dict[str, int]) -> pd.Data
     return result.sort_values(["rank_date", "rank"]).reset_index(drop=True)
 
 
+def load_manual_snapshots(team_lookup: dict[str, int]) -> pd.DataFrame:
+    """Load any manually provided FIFA ranking CSV files from data/external/.
+
+    These files should have columns: team_name, rank, rank_date, points
+    """
+    snapshots: list[pd.DataFrame] = []
+    for path in sorted(EXTERNAL_DIR.glob("fifa_ranking_*.csv")):
+        if path.name in ("fifa_rankings.csv", "fifa_ranking_raw.csv"):
+            continue
+        logger.info("Loading manual ranking snapshot: %s", path.name)
+        df = pd.read_csv(path)
+        if "team_name" in df.columns and "rank" in df.columns and "rank_date" in df.columns:
+            # Map to team IDs using the same logic
+            mapped = map_rankings(df.rename(columns={"team_name": "country_full"}), team_lookup)
+            snapshots.append(mapped)
+        else:
+            logger.warning("Skipping %s — missing required columns", path.name)
+    if snapshots:
+        return pd.concat(snapshots, ignore_index=True)
+    return pd.DataFrame(columns=["team_id", "team_name", "rank", "rank_date"])
+
+
 def main() -> None:
-    rankings = download_rankings()
     team_lookup = load_team_lookup()
 
     if not team_lookup:
         logger.error("Cannot map rankings without team lookup — aborting")
         return
 
+    # Download historical rankings (1992-2020)
+    rankings = download_rankings()
     mapped = map_rankings(rankings, team_lookup)
+
+    # Load any manual snapshots (e.g. April 2026 from PDF)
+    manual = load_manual_snapshots(team_lookup)
+    if not manual.empty:
+        logger.info("Loaded %d manual ranking rows", len(manual))
+        mapped = pd.concat([mapped, manual], ignore_index=True)
+        mapped = mapped.sort_values(["rank_date", "rank"]).reset_index(drop=True)
 
     output_path = EXTERNAL_DIR / "fifa_rankings.csv"
     mapped.to_csv(output_path, index=False)
