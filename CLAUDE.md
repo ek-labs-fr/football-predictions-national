@@ -123,8 +123,9 @@ football-predictions-national/
 
 - Branch naming: `feature/<name>`, `fix/<name>`, `data/<name>`
 - Commit messages: imperative mood, concise
+- **Always push incremental work** — commit and push after completing each phase or meaningful chunk of work, don't wait for the user to ask
 - Never commit: API keys, `.env` files, model artefact binaries, raw API response dumps
-- `.gitignore` must exclude: `artefacts/`, `data/raw/`, `.env`, `node_modules/`, `__pycache__/`
+- `.gitignore` must exclude: `artefacts/`, `data/raw/`, `data/processed/`, `data/external/`, `.env`, `node_modules/`, `__pycache__/`
 
 ### General
 
