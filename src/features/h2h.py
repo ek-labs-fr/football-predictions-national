@@ -83,6 +83,12 @@ def compute_h2h_features(
         h2h_away_goals: list[int] = []
         last_winner = None
 
+        # Filter out H2H matches with missing goals
+        prior = prior.dropna(subset=["home_goals", "away_goals"])
+        if len(prior) < _MIN_H2H_MATCHES:
+            rows.append({"fixture_id": fid, **_NEUTRAL})
+            continue
+
         for _, h in prior.iterrows():
             hg = int(h["home_goals"])
             ag = int(h["away_goals"])

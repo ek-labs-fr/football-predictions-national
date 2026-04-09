@@ -438,7 +438,6 @@ def train_candidates(split: SplitData) -> list[TrainedModel]:
     lr = LogisticRegression(
         class_weight="balanced",
         max_iter=1000,
-        multi_class="multinomial",
     )
     lr.fit(X_scaled, split.y_outcome_train, sample_weight=split.w_train)
     models.append(

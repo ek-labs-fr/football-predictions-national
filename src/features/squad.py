@@ -24,8 +24,8 @@ TOP5_LEAGUES = {
 _STAR_RATING_THRESHOLD = 8.0
 
 
-def _is_top5(league_name: str | None) -> bool:
-    if not league_name:
+def _is_top5(league_name: object) -> bool:
+    if not isinstance(league_name, str):
         return False
     return league_name.strip().lower() in TOP5_LEAGUES
 
