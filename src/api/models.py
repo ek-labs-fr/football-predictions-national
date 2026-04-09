@@ -99,6 +99,56 @@ class TeamListResponse(BaseModel):
 
 
 # ------------------------------------------------------------------
+# Match listing with performance tracking
+# ------------------------------------------------------------------
+
+
+class MatchResultResponse(BaseModel):
+    """A single match with predicted and actual scores."""
+
+    fixture_id: int
+    date: str
+    home_team_id: int
+    home_team_name: str
+    away_team_id: int
+    away_team_name: str
+    predicted_home_goals: float
+    predicted_away_goals: float
+    predicted_score: str
+    actual_home_goals: int | None = None
+    actual_away_goals: int | None = None
+    actual_score: str | None = None
+    predicted_outcome: str
+    actual_outcome: str | None = None
+    correct_outcome: bool | None = None
+    correct_score: bool | None = None
+    home_win_prob: float
+    draw_prob: float
+    away_win_prob: float
+    league_name: str = ""
+    round: str = ""
+
+
+class PerformanceSummaryResponse(BaseModel):
+    """Running algorithm performance stats."""
+
+    total_matches: int
+    completed_matches: int
+    correct_outcomes: int
+    correct_scores: int
+    outcome_accuracy: float
+    score_accuracy: float
+    avg_mae: float
+
+
+class MatchListResponse(BaseModel):
+    """Response body for GET /matches."""
+
+    matches: list[MatchResultResponse]
+    performance: PerformanceSummaryResponse
+
+
+# ------------------------------------------------------------------
 # Health
 # ------------------------------------------------------------------
 
