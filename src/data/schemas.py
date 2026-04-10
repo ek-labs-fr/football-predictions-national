@@ -269,6 +269,85 @@ class FixtureEvent(BaseModel):
 
 
 # ------------------------------------------------------------------
+# Match Statistics (per fixture)
+# ------------------------------------------------------------------
+
+
+class StatisticItem(BaseModel):
+    type: str | None = None
+    value: int | float | str | None = None
+
+
+class FixtureStatistics(BaseModel):
+    team: EventTeam | None = None
+    statistics: list[StatisticItem] = Field(default_factory=list)
+
+
+# ------------------------------------------------------------------
+# Betting Odds
+# ------------------------------------------------------------------
+
+
+class OddValue(BaseModel):
+    value: str
+    odd: str
+
+
+class Bet(BaseModel):
+    id: int | None = None
+    name: str | None = None
+    values: list[OddValue] = Field(default_factory=list)
+
+
+class Bookmaker(BaseModel):
+    id: int | None = None
+    name: str | None = None
+    bets: list[Bet] = Field(default_factory=list)
+
+
+class OddsFixture(BaseModel):
+    id: int
+
+
+class OddsResponse(BaseModel):
+    fixture: OddsFixture | None = None
+    bookmakers: list[Bookmaker] = Field(default_factory=list)
+
+
+# ------------------------------------------------------------------
+# Injuries / Suspensions
+# ------------------------------------------------------------------
+
+
+class InjuryPlayer(BaseModel):
+    id: int | None = None
+    name: str | None = None
+    photo: str | None = None
+    type: str | None = None
+    reason: str | None = None
+
+
+class InjuryTeam(BaseModel):
+    id: int | None = None
+    name: str | None = None
+    logo: str | None = None
+
+
+class InjuryFixture(BaseModel):
+    id: int | None = None
+    timezone: str | None = None
+    date: datetime | None = None
+    timestamp: int | None = None
+
+
+class Injury(BaseModel):
+    player: InjuryPlayer | None = None
+    team: InjuryTeam | None = None
+    fixture: InjuryFixture | None = None
+    league: FixtureLeague | None = None
+
+
+# ------------------------------------------------------------------
 # Generic API response wrapper
 # ------------------------------------------------------------------
 

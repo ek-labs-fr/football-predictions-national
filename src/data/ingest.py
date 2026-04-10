@@ -13,7 +13,10 @@ from src.data.api_client import APIFootballClient  # noqa: TCH001
 from src.data.schemas import (
     Fixture,
     FixtureEvent,
+    FixtureStatistics,
+    Injury,
     League,
+    OddsResponse,
     Player,
     Team,
     TeamStatistics,
@@ -214,6 +217,17 @@ def merge_all_fixtures(
     # Filter to completed matches (have goals)
     merged = merged.dropna(subset=["home_goals", "away_goals"])
     merged = merged.drop_duplicates(subset=["fixture_id"])
+
+    # Filter to national teams only (exclude clubs, youth teams)
+    lookup_path = output_dir / "team_lookup.json"
+    if lookup_path.exists():
+        national_ids = set(json.load(open(lookup_path, encoding="utf-8")).values())
+        before = len(merged)
+        merged = merged[
+            merged["home_team_id"].isin(national_ids) & merged["away_team_id"].isin(national_ids)
+        ]
+        logger.info("Filtered to national teams: %d → %d fixtures", before, len(merged))
+
     merged = merged.sort_values("date").reset_index(drop=True)
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -507,4 +521,290 @@ def pull_events(
         logger.info("Saved %d event rows to %s", len(df), path)
     else:
         logger.warning("No event data pulled")
+    return df
+
+
+# ------------------------------------------------------------------
+# Step 1.10 — Betting Odds Pull
+# ------------------------------------------------------------------
+
+
+def fetch_odds(client: APIFootballClient, fixture_id: int) -> OddsResponse | None:
+    """Fetch pre-match betting odds for a single fixture."""
+    data = client.get("/odds", {"fixture": fixture_id})
+    resp = data.get("response", [])
+    if not resp:
+        return None
+    return OddsResponse.model_validate(resp[0])
+
+
+def _extract_match_winner_odds(odds: OddsResponse) -> dict[str, Any] | None:
+    """Extract average 1X2 odds across all bookmakers."""
+    home_odds: list[float] = []
+    draw_odds: list[float] = []
+    away_odds: list[float] = []
+
+    for bk in odds.bookmakers:
+        for bet in bk.bets:
+            if bet.name and "match winner" in bet.name.lower():
+                for val in bet.values:
+                    try:
+                        odd = float(val.odd)
+                    except (ValueError, TypeError):
+                        continue
+                    v = val.value.lower()
+                    if v == "home":
+                        home_odds.append(odd)
+                    elif v == "draw":
+                        draw_odds.append(odd)
+                    elif v == "away":
+                        away_odds.append(odd)
+
+    if not (home_odds and draw_odds and away_odds):
+        return None
+
+    avg_home = sum(home_odds) / len(home_odds)
+    avg_draw = sum(draw_odds) / len(draw_odds)
+    avg_away = sum(away_odds) / len(away_odds)
+
+    # Convert to implied probabilities and normalise
+    raw_home = 1 / avg_home
+    raw_draw = 1 / avg_draw
+    raw_away = 1 / avg_away
+    total = raw_home + raw_draw + raw_away
+
+    return {
+        "odds_home_avg": round(avg_home, 3),
+        "odds_draw_avg": round(avg_draw, 3),
+        "odds_away_avg": round(avg_away, 3),
+        "odds_home_win": round(raw_home / total, 4),
+        "odds_draw": round(raw_draw / total, 4),
+        "odds_away_win": round(raw_away / total, 4),
+    }
+
+
+def pull_odds(
+    client: APIFootballClient,
+    fixtures_df: pd.DataFrame,
+    output_dir: Path = PROCESSED_DIR,
+) -> pd.DataFrame:
+    """Pull betting odds for all fixtures."""
+    fixture_ids = fixtures_df["fixture_id"].unique()
+    rows: list[dict[str, Any]] = []
+
+    for i, fid in enumerate(fixture_ids):
+        odds = fetch_odds(client, int(fid))
+        if odds:
+            extracted = _extract_match_winner_odds(odds)
+            if extracted:
+                extracted["fixture_id"] = int(fid)
+                rows.append(extracted)
+        if (i + 1) % 200 == 0:
+            logger.info("Odds progress: %d/%d fixtures (%d with data)", i + 1, len(fixture_ids), len(rows))
+
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / "odds.csv"
+        df.to_csv(path, index=False)
+        logger.info("Saved %d odds rows to %s", len(df), path)
+    else:
+        logger.warning("No odds data pulled")
+    return df
+
+
+# ------------------------------------------------------------------
+# Step 1.11 — Match Statistics Pull
+# ------------------------------------------------------------------
+
+
+_STAT_KEYS = [
+    "Shots on Goal",
+    "Shots off Goal",
+    "Total Shots",
+    "Ball Possession",
+    "Corner Kicks",
+    "Fouls",
+    "Passes %",
+    "Passes accurate",
+    "expected_goals",
+]
+
+
+def fetch_match_statistics(
+    client: APIFootballClient, fixture_id: int
+) -> list[FixtureStatistics]:
+    """Fetch per-team match statistics for a single fixture."""
+    data = client.get("/fixtures/statistics", {"fixture": fixture_id})
+    return [FixtureStatistics.model_validate(item) for item in data.get("response", [])]
+
+
+def _parse_stat_value(value: int | float | str | None) -> float | None:
+    """Parse a stat value, stripping '%' if present."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).strip().rstrip("%")
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return None
+
+
+def _extract_match_stat_row(
+    fixture_id: int, stats: list[FixtureStatistics]
+) -> dict[str, Any] | None:
+    """Flatten per-team match statistics into a single row."""
+    if len(stats) < 2:
+        return None
+
+    row: dict[str, Any] = {"fixture_id": fixture_id}
+
+    for idx, prefix in enumerate(("home", "away")):
+        team_stats = stats[idx]
+        if team_stats.team and team_stats.team.id:
+            row[f"{prefix}_team_id"] = team_stats.team.id
+
+        stat_map = {s.type: s.value for s in team_stats.statistics if s.type}
+        row[f"{prefix}_shots_on"] = _parse_stat_value(stat_map.get("Shots on Goal"))
+        row[f"{prefix}_shots_off"] = _parse_stat_value(stat_map.get("Shots off Goal"))
+        row[f"{prefix}_total_shots"] = _parse_stat_value(stat_map.get("Total Shots"))
+        row[f"{prefix}_possession"] = _parse_stat_value(stat_map.get("Ball Possession"))
+        row[f"{prefix}_corners"] = _parse_stat_value(stat_map.get("Corner Kicks"))
+        row[f"{prefix}_fouls"] = _parse_stat_value(stat_map.get("Fouls"))
+        row[f"{prefix}_passes_pct"] = _parse_stat_value(stat_map.get("Passes %"))
+        row[f"{prefix}_passes_accurate"] = _parse_stat_value(stat_map.get("Passes accurate"))
+        row[f"{prefix}_xg"] = _parse_stat_value(stat_map.get("expected_goals"))
+
+    return row
+
+
+def pull_match_statistics(
+    client: APIFootballClient,
+    fixtures_df: pd.DataFrame,
+    min_year: int = 2006,
+    output_dir: Path = PROCESSED_DIR,
+) -> pd.DataFrame:
+    """Pull match statistics for all fixtures from min_year onward."""
+    fixtures_df = fixtures_df.copy()
+    fixtures_df["date"] = pd.to_datetime(fixtures_df["date"])
+    recent = fixtures_df[fixtures_df["date"].dt.year >= min_year]
+    fixture_ids = recent["fixture_id"].unique()
+
+    rows: list[dict[str, Any]] = []
+    for i, fid in enumerate(fixture_ids):
+        stats = fetch_match_statistics(client, int(fid))
+        if stats:
+            extracted = _extract_match_stat_row(int(fid), stats)
+            if extracted:
+                rows.append(extracted)
+        if (i + 1) % 200 == 0:
+            logger.info(
+                "Match stats progress: %d/%d fixtures (%d with data)",
+                i + 1, len(fixture_ids), len(rows),
+            )
+
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / "match_statistics.csv"
+        df.to_csv(path, index=False)
+        logger.info("Saved %d match statistics rows to %s", len(df), path)
+    else:
+        logger.warning("No match statistics pulled")
+    return df
+
+
+# ------------------------------------------------------------------
+# Step 1.12 — Injuries / Suspensions Pull
+# ------------------------------------------------------------------
+
+
+def fetch_injuries(client: APIFootballClient, fixture_id: int) -> list[Injury]:
+    """Fetch injuries/suspensions for a single fixture."""
+    data = client.get("/injuries", {"fixture": fixture_id})
+    return [Injury.model_validate(item) for item in data.get("response", [])]
+
+
+def _aggregate_injuries(
+    fixture_id: int, injuries: list[Injury], player_ratings: dict[int, float] | None = None
+) -> dict[int, dict[str, Any]]:
+    """Aggregate injuries into per-team summary rows."""
+    team_data: dict[int, dict[str, Any]] = {}
+    player_ratings = player_ratings or {}
+
+    for inj in injuries:
+        if not inj.team or not inj.team.id:
+            continue
+        tid = inj.team.id
+        if tid not in team_data:
+            team_data[tid] = {
+                "fixture_id": fixture_id,
+                "team_id": tid,
+                "injuries_count": 0,
+                "suspensions_count": 0,
+                "missing_total": 0,
+                "missing_quality": 0.0,
+            }
+        td = team_data[tid]
+        ptype = (inj.player.type or "").lower() if inj.player else ""
+        if "missing" in ptype or "suspension" in ptype or "suspended" in ptype:
+            td["suspensions_count"] += 1
+        else:
+            td["injuries_count"] += 1
+        td["missing_total"] += 1
+
+        # Add quality of missing player if we have their rating
+        if inj.player and inj.player.id and inj.player.id in player_ratings:
+            td["missing_quality"] += player_ratings[inj.player.id]
+
+    return team_data
+
+
+def pull_injuries(
+    client: APIFootballClient,
+    fixtures_df: pd.DataFrame,
+    min_year: int = 2010,
+    output_dir: Path = PROCESSED_DIR,
+) -> pd.DataFrame:
+    """Pull injury/suspension data for all fixtures from min_year onward."""
+    fixtures_df = fixtures_df.copy()
+    fixtures_df["date"] = pd.to_datetime(fixtures_df["date"])
+    recent = fixtures_df[fixtures_df["date"].dt.year >= min_year]
+    fixture_ids = recent["fixture_id"].unique()
+
+    # Load player ratings for quality metric
+    player_ratings: dict[int, float] = {}
+    players_path = output_dir / "players.csv"
+    if players_path.exists():
+        players_df = pd.read_csv(players_path)
+        valid = players_df.dropna(subset=["player_id", "rating"])
+        for _, row in valid.iterrows():
+            try:
+                player_ratings[int(row["player_id"])] = float(row["rating"])
+            except (ValueError, TypeError):
+                continue
+        logger.info("Loaded %d player ratings for injury quality metric", len(player_ratings))
+
+    rows: list[dict[str, Any]] = []
+    for i, fid in enumerate(fixture_ids):
+        injuries = fetch_injuries(client, int(fid))
+        if injuries:
+            team_data = _aggregate_injuries(int(fid), injuries, player_ratings)
+            rows.extend(team_data.values())
+        if (i + 1) % 200 == 0:
+            logger.info(
+                "Injuries progress: %d/%d fixtures (%d rows)",
+                i + 1, len(fixture_ids), len(rows),
+            )
+
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / "injuries.csv"
+        df.to_csv(path, index=False)
+        logger.info("Saved %d injury rows to %s", len(df), path)
+    else:
+        logger.warning("No injury data pulled")
     return df

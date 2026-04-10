@@ -6,6 +6,7 @@ predicted vs actual, and computes running performance metrics.
 
 from __future__ import annotations
 
+import json
 import logging
 from functools import lru_cache
 from pathlib import Path
@@ -38,6 +39,23 @@ _COMP_NAMES: dict[int, str] = {
     10: "Asian Cup",
     11: "Friendlies",
 }
+
+
+def _load_national_ids(processed_dir: Path) -> set[int] | None:
+    """Load national team IDs from team_lookup.json."""
+    path = processed_dir / "team_lookup.json"
+    if not path.exists():
+        return None
+    lookup = json.load(open(path, encoding="utf-8"))
+    return set(lookup.values())
+
+
+def _filter_national(df: pd.DataFrame, national_ids: set[int] | None) -> pd.DataFrame:
+    """Keep only rows where both teams are in the national team lookup."""
+    if national_ids is None:
+        return df
+    mask = df["home_team_id"].isin(national_ids) & df["away_team_id"].isin(national_ids)
+    return df[mask].reset_index(drop=True)
 
 
 def _derive_outcome(home_goals: int, away_goals: int) -> str:
@@ -115,6 +133,7 @@ class PredictionsStore:
         """Load training table and generate predictions using the model."""
         df = pd.read_csv(training_path)
         df["date"] = pd.to_datetime(df["date"], utc=True)
+        df = _filter_national(df, _load_national_ids(self.processed_dir))
         df = df.sort_values("date", ascending=False).reset_index(drop=True)
 
         # Identify feature columns
@@ -174,10 +193,33 @@ class PredictionsStore:
             )
 
     def _load_fixtures_only(self, fixtures_path: Path) -> None:
-        """Load raw fixtures without model predictions (fallback)."""
+        """Load raw fixtures with simple Poisson predictions from historical averages."""
         df = pd.read_csv(fixtures_path)
         df["date"] = pd.to_datetime(df["date"], utc=True)
+        df = _filter_national(df, _load_national_ids(self.processed_dir))
         df = df.sort_values("date", ascending=False).reset_index(drop=True)
+
+        # Compute per-team historical attack/defence strengths
+        completed = df.dropna(subset=["home_goals", "away_goals"])
+        global_home_avg = completed["home_goals"].mean() if len(completed) > 0 else 1.3
+        global_away_avg = completed["away_goals"].mean() if len(completed) > 0 else 1.0
+
+        team_attack: dict[int, float] = {}
+        team_defence: dict[int, float] = {}
+        for tid in set(completed["home_team_id"]) | set(completed["away_team_id"]):
+            home_rows = completed[completed["home_team_id"] == tid]
+            away_rows = completed[completed["away_team_id"] == tid]
+            goals_scored = (
+                home_rows["home_goals"].sum() + away_rows["away_goals"].sum()
+            )
+            goals_conceded = (
+                home_rows["away_goals"].sum() + away_rows["home_goals"].sum()
+            )
+            n_matches = len(home_rows) + len(away_rows)
+            if n_matches >= 3:
+                avg_global = (global_home_avg + global_away_avg) / 2
+                team_attack[tid] = (goals_scored / n_matches) / avg_global if avg_global else 1.0
+                team_defence[tid] = (goals_conceded / n_matches) / avg_global if avg_global else 1.0
 
         for _, row in df.iterrows():
             actual_hg = int(row["home_goals"]) if pd.notna(row["home_goals"]) else None
@@ -187,27 +229,46 @@ class PredictionsStore:
                 _derive_outcome(actual_hg, actual_ag) if actual_hg is not None else None
             )
 
+            h_id = int(row["home_team_id"])
+            a_id = int(row["away_team_id"])
+            h_att = team_attack.get(h_id, 1.0)
+            h_def = team_defence.get(h_id, 1.0)
+            a_att = team_attack.get(a_id, 1.0)
+            a_def = team_defence.get(a_id, 1.0)
+
+            lambda_h = max(0.2, global_home_avg * h_att * a_def)
+            lambda_a = max(0.2, global_away_avg * a_att * h_def)
+
+            probs = outcome_probs_from_lambdas(lambda_h, lambda_a)
+            pred_score = most_likely_score(lambda_h, lambda_a)
+            pred_outcome = _derive_outcome_from_probs(
+                probs["home_win"], probs["draw"], probs["away_win"]
+            )
+
+            correct_outcome = pred_outcome == actual_outcome if actual_outcome else None
+            correct_score = pred_score == actual_score if actual_score else None
+
             self.matches.append(
                 MatchResultResponse(
                     fixture_id=int(row["fixture_id"]),
                     date=str(row["date"]),
-                    home_team_id=int(row["home_team_id"]),
+                    home_team_id=h_id,
                     home_team_name=str(row.get("home_team_name", "")),
-                    away_team_id=int(row["away_team_id"]),
+                    away_team_id=a_id,
                     away_team_name=str(row.get("away_team_name", "")),
-                    predicted_home_goals=0.0,
-                    predicted_away_goals=0.0,
-                    predicted_score="0-0",
+                    predicted_home_goals=round(lambda_h, 2),
+                    predicted_away_goals=round(lambda_a, 2),
+                    predicted_score=pred_score,
                     actual_home_goals=actual_hg,
                     actual_away_goals=actual_ag,
                     actual_score=actual_score,
-                    predicted_outcome="draw",
+                    predicted_outcome=pred_outcome,
                     actual_outcome=actual_outcome,
-                    correct_outcome=None,
-                    correct_score=None,
-                    home_win_prob=0.33,
-                    draw_prob=0.34,
-                    away_win_prob=0.33,
+                    correct_outcome=correct_outcome,
+                    correct_score=correct_score,
+                    home_win_prob=round(probs["home_win"], 4),
+                    draw_prob=round(probs["draw"], 4),
+                    away_win_prob=round(probs["away_win"], 4),
                     league_name=_COMP_NAMES.get(int(row.get("league_id", 0)), ""),
                     round=str(row.get("round", "")),
                 )
