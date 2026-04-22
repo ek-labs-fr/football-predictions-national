@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from src.features import io
+
 logger = logging.getLogger(__name__)
 
 PROCESSED_DIR = Path("data/processed")
@@ -42,6 +44,18 @@ _COMP_WEIGHT: dict[int, float] = {
 _DEFAULT_RANK = 150  # for teams without a FIFA ranking
 _DEFAULT_ELO = 1300  # approximate average Elo rating for unrated teams
 
+# API-Football status codes that mean "not yet played, still scheduled".
+# Excludes CANC/PST/ABD so we don't predict matches that are never happening.
+_UPCOMING_STATUSES = {"NS", "TBD"}
+
+
+def _filter_upcoming(df: pd.DataFrame) -> pd.DataFrame:
+    """Keep only fixtures that are genuinely scheduled but not yet played."""
+    mask = df["outcome"].isna()
+    if "status" in df.columns:
+        mask &= df["status"].isin(_UPCOMING_STATUSES)
+    return df[mask].reset_index(drop=True)
+
 
 # ------------------------------------------------------------------
 # Step 2.5 — Match Context Features
@@ -70,11 +84,10 @@ def add_match_context(fixtures: pd.DataFrame) -> pd.DataFrame:
 
 def _load_fifa_rankings(path: str | Path = EXTERNAL_DIR / "fifa_rankings.csv") -> pd.DataFrame:
     """Load FIFA rankings and prepare for lookup."""
-    path = Path(path)
-    if not path.exists():
+    if not io.exists(path):
         logger.warning("FIFA rankings file not found at %s — ranking features will be null", path)
         return pd.DataFrame(columns=["team_id", "rank", "rank_date"])
-    df = pd.read_csv(path)
+    df = io.read_csv(path)
     df["rank_date"] = pd.to_datetime(df["rank_date"], utc=True)
     return df.sort_values("rank_date")
 
@@ -119,11 +132,10 @@ def add_fifa_rankings(
 
 def _load_elo_ratings(path: str | Path = EXTERNAL_DIR / "elo_ratings.csv") -> pd.DataFrame:
     """Load Elo ratings and prepare for lookup."""
-    path = Path(path)
-    if not path.exists():
+    if not io.exists(path):
         logger.warning("Elo ratings file not found at %s — Elo features will be null", path)
         return pd.DataFrame(columns=["team_id", "elo_rating", "elo_date"])
-    df = pd.read_csv(path)
+    df = io.read_csv(path)
     df["elo_date"] = pd.to_datetime(df["elo_date"], utc=True)
     return df.sort_values("elo_date")
 
@@ -166,42 +178,31 @@ def add_elo_ratings(
 # ------------------------------------------------------------------
 
 
-def build_training_table(
-    fixtures_path: str | Path = PROCESSED_DIR / "all_fixtures.csv",
-    rolling_path: str | Path = PROCESSED_DIR / "features_rolling.csv",
-    squad_path: str | Path = PROCESSED_DIR / "features_squad.csv",
-    h2h_path: str | Path = PROCESSED_DIR / "features_h2h.csv",
-    tournament_path: str | Path = PROCESSED_DIR / "features_tournament.csv",
-    rankings_path: str | Path = EXTERNAL_DIR / "fifa_rankings.csv",
-    elo_path: str | Path = EXTERNAL_DIR / "elo_ratings.csv",
-    output_path: str | Path = PROCESSED_DIR / "training_table.csv",
+def _assemble_national_table(
+    fixtures_path: str | Path,
+    rolling_path: str | Path,
+    squad_path: str | Path,
+    h2h_path: str | Path,
+    tournament_path: str | Path,
+    rankings_path: str | Path,
+    elo_path: str | Path,
 ) -> pd.DataFrame:
-    """Join all feature sources into a single row-per-match training table.
+    """Return the national fixtures table joined with every feature source.
 
-    Returns
-    -------
-    pd.DataFrame
-        The flat training table with all features and labels.
+    No label filtering; no disk write. Callers apply their own filter and
+    persist — see ``build_training_table`` and ``build_inference_table``.
     """
-    # Load backbone
-    df = pd.read_csv(fixtures_path)
+    df = io.read_csv(fixtures_path)
     df["date"] = pd.to_datetime(df["date"], utc=True)
     df = df.sort_values("date").reset_index(drop=True)
     logger.info("Backbone: %d fixtures", len(df))
 
-    # Match context (Step 2.5)
     df = add_match_context(df)
-
-    # FIFA rankings (Step 2.6)
     df = add_fifa_rankings(df, rankings_path)
-
-    # Elo ratings
     df = add_elo_ratings(df, elo_path)
 
-    # Rolling features — join for home and away teams
-    rolling_path = Path(rolling_path)
-    if rolling_path.exists():
-        rolling = pd.read_csv(rolling_path)
+    if io.exists(rolling_path):
+        rolling = io.read_csv(rolling_path)
         home_rolling = rolling.rename(
             columns={c: f"home_{c}" for c in rolling.columns if c not in ("fixture_id", "team_id")}
         )
@@ -223,10 +224,8 @@ def build_training_table(
     else:
         logger.warning("Rolling features not found at %s", rolling_path)
 
-    # Squad features — join for home and away teams
-    squad_path = Path(squad_path)
-    if squad_path.exists():
-        squad = pd.read_csv(squad_path)
+    if io.exists(squad_path):
+        squad = io.read_csv(squad_path)
         home_squad = squad.rename(
             columns={c: f"home_{c}" for c in squad.columns if c not in ("team_id", "season")}
         )
@@ -248,18 +247,14 @@ def build_training_table(
     else:
         logger.warning("Squad features not found at %s", squad_path)
 
-    # H2H features
-    h2h_path = Path(h2h_path)
-    if h2h_path.exists():
-        h2h = pd.read_csv(h2h_path)
+    if io.exists(h2h_path):
+        h2h = io.read_csv(h2h_path)
         df = df.merge(h2h, on="fixture_id", how="left")
     else:
         logger.warning("H2H features not found at %s", h2h_path)
 
-    # Tournament features — join for home and away teams
-    tournament_path = Path(tournament_path)
-    if tournament_path.exists():
-        tourn = pd.read_csv(tournament_path)
+    if io.exists(tournament_path):
+        tourn = io.read_csv(tournament_path)
         home_tourn = tourn.rename(
             columns={c: f"home_{c}" for c in tourn.columns if c not in ("fixture_id", "team_id")}
         )
@@ -281,7 +276,6 @@ def build_training_table(
     else:
         logger.warning("Tournament features not found at %s", tournament_path)
 
-    # Differential features
     if "home_points_per_game_l10" in df.columns:
         df["form_diff"] = df["home_points_per_game_l10"] - df["away_points_per_game_l10"]
     if "home_goals_scored_avg_l10" in df.columns:
@@ -296,18 +290,29 @@ def build_training_table(
     if "home_top5_league_ratio" in df.columns:
         df["top5_ratio_diff"] = df["home_top5_league_ratio"] - df["away_top5_league_ratio"]
 
-    # Labels
     df["goal_diff"] = df["home_goals"] - df["away_goals"]
+    return df
 
-    # Drop incomplete matches
+
+def build_training_table(
+    fixtures_path: str | Path = PROCESSED_DIR / "all_fixtures.csv",
+    rolling_path: str | Path = PROCESSED_DIR / "features_rolling.csv",
+    squad_path: str | Path = PROCESSED_DIR / "features_squad.csv",
+    h2h_path: str | Path = PROCESSED_DIR / "features_h2h.csv",
+    tournament_path: str | Path = PROCESSED_DIR / "features_tournament.csv",
+    rankings_path: str | Path = EXTERNAL_DIR / "fifa_rankings.csv",
+    elo_path: str | Path = EXTERNAL_DIR / "elo_ratings.csv",
+    output_path: str | Path = PROCESSED_DIR / "training_table.csv",
+) -> pd.DataFrame:
+    """Completed fixtures joined with features + labels — the training set."""
+    df = _assemble_national_table(
+        fixtures_path, rolling_path, squad_path, h2h_path,
+        tournament_path, rankings_path, elo_path,
+    )
     df = df.dropna(subset=["home_goals", "away_goals", "outcome"])
 
-    # Save
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(output_path, index=False)
+    io.write_csv(output_path, df)
 
-    # Log summary
     logger.info("Training table: %d rows, %d columns", len(df), len(df.columns))
     logger.info("Date range: %s to %s", df["date"].min(), df["date"].max())
     logger.info("Outcome distribution:\n%s", df["outcome"].value_counts().to_string())
@@ -315,6 +320,32 @@ def build_training_table(
     cols_with_missing = missing_pct[missing_pct > 0]
     if not cols_with_missing.empty:
         logger.info("Columns with missing values:\n%s", cols_with_missing.to_string())
+
+    return df
+
+
+def build_inference_table(
+    fixtures_path: str | Path = PROCESSED_DIR / "all_fixtures.csv",
+    rolling_path: str | Path = PROCESSED_DIR / "features_rolling.csv",
+    squad_path: str | Path = PROCESSED_DIR / "features_squad.csv",
+    h2h_path: str | Path = PROCESSED_DIR / "features_h2h.csv",
+    tournament_path: str | Path = PROCESSED_DIR / "features_tournament.csv",
+    rankings_path: str | Path = EXTERNAL_DIR / "fifa_rankings.csv",
+    elo_path: str | Path = EXTERNAL_DIR / "elo_ratings.csv",
+    output_path: str | Path = PROCESSED_DIR / "inference_table.csv",
+) -> pd.DataFrame:
+    """Upcoming fixtures (outcome not yet known) with features joined — the serving set."""
+    df = _assemble_national_table(
+        fixtures_path, rolling_path, squad_path, h2h_path,
+        tournament_path, rankings_path, elo_path,
+    )
+    df = _filter_upcoming(df)
+
+    io.write_csv(output_path, df)
+
+    logger.info("Inference table: %d upcoming fixtures, %d columns", len(df), len(df.columns))
+    if len(df):
+        logger.info("Date range: %s to %s", df["date"].min(), df["date"].max())
 
     return df
 
@@ -352,35 +383,25 @@ def _add_rest_days(fixtures: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def build_club_training_table(
-    fixtures_path: str | Path = PROCESSED_DIR / "all_fixtures_club.csv",
-    rolling_path: str | Path = PROCESSED_DIR / "features_rolling_club.csv",
-    squad_path: str | Path = PROCESSED_DIR / "features_squad_club.csv",
-    h2h_path: str | Path = PROCESSED_DIR / "features_h2h_club.csv",
-    output_path: str | Path = PROCESSED_DIR / "training_table_club.csv",
+def _assemble_club_table(
+    fixtures_path: str | Path,
+    rolling_path: str | Path,
+    squad_path: str | Path,
+    h2h_path: str | Path,
 ) -> pd.DataFrame:
-    """Join club features into a single training table.
-
-    Club pipeline differs from national: no FIFA rankings, no Elo, no tournament
-    stage features, and home advantage is real (not a neutral venue).
-    """
-    df = pd.read_csv(fixtures_path)
+    """Return the club fixtures table joined with every feature source (no filter)."""
+    df = io.read_csv(fixtures_path)
     df["date"] = pd.to_datetime(df["date"], utc=True)
     df = df.sort_values("date").reset_index(drop=True)
     logger.info("Club backbone: %d fixtures", len(df))
 
-    # Rest days
     df = _add_rest_days(df)
-
-    # Match weight: all league matches equal
     df["match_weight"] = 1.0
     df["neutral_venue"] = False
     df["is_knockout"] = False
 
-    # Rolling features
-    rolling_path = Path(rolling_path)
-    if rolling_path.exists():
-        rolling = pd.read_csv(rolling_path)
+    if io.exists(rolling_path):
+        rolling = io.read_csv(rolling_path)
         home_rolling = rolling.rename(
             columns={c: f"home_{c}" for c in rolling.columns if c not in ("fixture_id", "team_id")}
         )
@@ -402,10 +423,8 @@ def build_club_training_table(
     else:
         logger.warning("Club rolling features not found at %s", rolling_path)
 
-    # Squad features keyed by (team_id, season)
-    squad_path = Path(squad_path)
-    if squad_path.exists():
-        squad = pd.read_csv(squad_path)
+    if io.exists(squad_path):
+        squad = io.read_csv(squad_path)
         home_squad = squad.rename(
             columns={c: f"home_{c}" for c in squad.columns if c not in ("team_id", "season")}
         )
@@ -427,15 +446,12 @@ def build_club_training_table(
     else:
         logger.warning("Club squad features not found at %s", squad_path)
 
-    # H2H features
-    h2h_path = Path(h2h_path)
-    if h2h_path.exists():
-        h2h = pd.read_csv(h2h_path)
+    if io.exists(h2h_path):
+        h2h = io.read_csv(h2h_path)
         df = df.merge(h2h, on="fixture_id", how="left")
     else:
         logger.warning("Club H2H features not found at %s", h2h_path)
 
-    # Differential features
     if "home_points_per_game_l10" in df.columns:
         df["form_diff"] = df["home_points_per_game_l10"] - df["away_points_per_game_l10"]
     if "home_goals_scored_avg_l10" in df.columns:
@@ -447,18 +463,48 @@ def build_club_training_table(
     if "home_rest_days" in df.columns:
         df["rest_days_diff"] = df["home_rest_days"] - df["away_rest_days"]
 
-    # Labels
     df["goal_diff"] = df["home_goals"] - df["away_goals"]
+    return df
 
-    # Drop incomplete matches
+
+def build_club_training_table(
+    fixtures_path: str | Path = PROCESSED_DIR / "all_fixtures_club.csv",
+    rolling_path: str | Path = PROCESSED_DIR / "features_rolling_club.csv",
+    squad_path: str | Path = PROCESSED_DIR / "features_squad_club.csv",
+    h2h_path: str | Path = PROCESSED_DIR / "features_h2h_club.csv",
+    output_path: str | Path = PROCESSED_DIR / "training_table_club.csv",
+) -> pd.DataFrame:
+    """Completed club fixtures joined with features + labels.
+
+    Club pipeline differs from national: no FIFA rankings, no Elo, no tournament
+    stage features, and home advantage is real (not a neutral venue).
+    """
+    df = _assemble_club_table(fixtures_path, rolling_path, squad_path, h2h_path)
     df = df.dropna(subset=["home_goals", "away_goals", "outcome"])
 
-    # Save
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(output_path, index=False)
+    io.write_csv(output_path, df)
 
     logger.info("Club training table: %d rows, %d columns", len(df), len(df.columns))
     logger.info("Date range: %s to %s", df["date"].min(), df["date"].max())
     logger.info("Outcome distribution:\n%s", df["outcome"].value_counts().to_string())
+    return df
+
+
+def build_club_inference_table(
+    fixtures_path: str | Path = PROCESSED_DIR / "all_fixtures_club.csv",
+    rolling_path: str | Path = PROCESSED_DIR / "features_rolling_club.csv",
+    squad_path: str | Path = PROCESSED_DIR / "features_squad_club.csv",
+    h2h_path: str | Path = PROCESSED_DIR / "features_h2h_club.csv",
+    output_path: str | Path = PROCESSED_DIR / "inference_table_club.csv",
+) -> pd.DataFrame:
+    """Upcoming club fixtures with features joined — the serving set."""
+    df = _assemble_club_table(fixtures_path, rolling_path, squad_path, h2h_path)
+    df = _filter_upcoming(df)
+
+    io.write_csv(output_path, df)
+
+    logger.info("Club inference table: %d upcoming fixtures, %d columns", len(df), len(df.columns))
+    if len(df):
+        logger.info("Date range: %s to %s", df["date"].min(), df["date"].max())
+
     return df

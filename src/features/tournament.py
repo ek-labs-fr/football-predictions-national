@@ -8,6 +8,8 @@ from typing import Any
 
 import pandas as pd
 
+from src.features import io
+
 logger = logging.getLogger(__name__)
 
 PROCESSED_DIR = Path("data/processed")
@@ -42,15 +44,14 @@ def compute_tournament_features(
     pd.DataFrame
         Tournament features keyed by (fixture_id, team_id).
     """
-    fixtures = pd.read_csv(fixtures_path)
+    fixtures = io.read_csv(fixtures_path)
     fixtures["date"] = pd.to_datetime(fixtures["date"], utc=True)
     fixtures = fixtures.sort_values("date").reset_index(drop=True)
 
     # Load events if available
     events_df: pd.DataFrame | None = None
-    events_path = Path(events_path)
-    if events_path.exists():
-        events_df = pd.read_csv(events_path)
+    if io.exists(events_path):
+        events_df = io.read_csv(events_path)
 
     rows: list[dict[str, Any]] = []
 
@@ -101,6 +102,11 @@ def compute_tournament_features(
                             "came_from_shootout": state["last_shootout"],
                         }
                     )
+
+            # Upcoming (NS) matches have null goals — emit features from prior
+            # state but do not advance accumulators.
+            if pd.isna(match["home_goals"]) or pd.isna(match["away_goals"]):
+                continue
 
             # After emitting features, update accumulators for both teams
             home_goals = int(match["home_goals"])
@@ -158,8 +164,6 @@ def compute_tournament_features(
 
     result = pd.DataFrame(rows)
 
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    result.to_csv(output_path, index=False)
+    io.write_csv(output_path, result)
     logger.info("Saved %d tournament feature rows to %s", len(result), output_path)
     return result

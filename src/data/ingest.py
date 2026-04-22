@@ -214,19 +214,17 @@ def merge_all_fixtures(
         return pd.DataFrame()
 
     merged = pd.concat(all_dfs, ignore_index=True)
-    # Filter to completed matches (have goals)
-    merged = merged.dropna(subset=["home_goals", "away_goals"])
     merged = merged.drop_duplicates(subset=["fixture_id"])
 
-    # Filter to national teams only (exclude clubs, youth teams)
-    lookup_path = output_dir / "team_lookup.json"
-    if lookup_path.exists():
-        national_ids = set(json.load(open(lookup_path, encoding="utf-8")).values())
-        before = len(merged)
-        merged = merged[
-            merged["home_team_id"].isin(national_ids) & merged["away_team_id"].isin(national_ids)
-        ]
-        logger.info("Filtered to national teams: %d → %d fixtures", before, len(merged))
+    # Keep only fixtures from the configured national-team competitions.
+    # Trusts league_id rather than a team-name lookup: every league in
+    # COMPETITION_SEASONS is national-only by construction, so cross-checking
+    # team IDs against a 2022-seeded roster would wrongly drop ~1,200 rows
+    # of friendlies and older Asian Cup/AFCON fixtures.
+    national_league_ids = set(competitions.keys())
+    before = len(merged)
+    merged = merged[merged["league_id"].isin(national_league_ids)]
+    logger.info("National-league filter: %d → %d fixtures", before, len(merged))
 
     merged = merged.sort_values("date").reset_index(drop=True)
 

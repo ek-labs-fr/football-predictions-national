@@ -6,7 +6,9 @@
 **
 
 !Dockerfile.lambda
+!Dockerfile.features
 !requirements.lambda.txt
+!requirements.features.txt
 !src/**
 
 # Within src/, still drop Python caches — they bloat the image and

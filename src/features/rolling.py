@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from src.features import io
+
 logger = logging.getLogger(__name__)
 
 PROCESSED_DIR = Path("data/processed")
@@ -134,7 +136,7 @@ def compute_rolling_features(
     pd.DataFrame
         Rolling features keyed by (fixture_id, team_id).
     """
-    fixtures = pd.read_csv(fixtures_path)
+    fixtures = io.read_csv(fixtures_path)
     fixtures["date"] = pd.to_datetime(fixtures["date"], utc=True)
     fixtures = fixtures.sort_values("date").reset_index(drop=True)
 
@@ -148,12 +150,6 @@ def compute_rolling_features(
 
     result = pd.concat(all_features, ignore_index=True)
 
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    result.to_csv(output_path, index=False)
-    logger.info(
-        "Saved %d rolling feature rows to %s",
-        len(result),
-        output_path,
-    )
+    io.write_csv(output_path, result)
+    logger.info("Saved %d rolling feature rows to %s", len(result), output_path)
     return result

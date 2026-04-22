@@ -97,7 +97,6 @@ class IngestStack(Stack):
             ),
             memory_size=1024,
             timeout=Duration.minutes(15),
-            reserved_concurrent_executions=1,
             dead_letter_queue=dlq,
             environment={
                 "DATA_BUCKET": data_bucket.bucket_name,
