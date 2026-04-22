@@ -1,0 +1,15 @@
+# Deny-all, then allow only what the Lambda image actually needs.
+# The CDK IngestStack passes REPO_ROOT as the Docker asset directory, so
+# without this file CDK hashes (and Docker uploads) tens of GB of cached
+# API JSONs, git history, cdk.out/, artefacts/, etc. before the build
+# even starts. See infrastructure/stacks/ingest_stack.py.
+**
+
+!Dockerfile.lambda
+!requirements.lambda.txt
+!src/**
+
+# Within src/, still drop Python caches — they bloat the image and
+# change on every local run, defeating the asset-hash cache.
+**/__pycache__/
+**/*.pyc
