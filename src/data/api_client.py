@@ -20,7 +20,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 _DEFAULT_BASE_URL = "https://v3.football.api-sports.io"
-_DEFAULT_CACHE_DIR = Path("data/raw")
+_DEFAULT_CACHE_DIR = Path("data/raw/national")
 _MAX_RETRIES = 3
 _BACKOFF_BASE = 2.0  # seconds
 
@@ -51,7 +51,8 @@ class APIFootballClient:
     base_url:
         API base URL. Defaults to ``https://v3.football.api-sports.io``.
     cache_dir:
-        Root directory for cached JSON responses. Defaults to ``data/raw``.
+        Root directory for cached JSON responses. Defaults to ``data/raw/national``.
+        For club ingestion, pass ``cache_dir="data/raw/club"`` explicitly.
     plan:
         API-Football subscription plan name (``"free"``, ``"pro"``, ``"ultra"``,
         ``"mega"``). Determines daily, per-minute, and per-second rate limits.

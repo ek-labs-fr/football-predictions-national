@@ -13,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 PROCESSED = Path("data/processed")
-RAW = Path("data/raw")
+RAW = Path("data/raw/national")
 
 
 def _check(label: str, passed: bool, detail: str = "") -> bool:

@@ -15,8 +15,9 @@ This script executes the full data ingestion pipeline (Steps 1.4–1.12):
   8. Pull match statistics (shots, xG, possession) for post-2006 fixtures
   9. Pull injuries/suspensions for post-2010 fixtures
 
-All raw API responses are cached to data/raw/ — re-running is safe and
-will skip already-cached requests.
+All raw API responses are cached to data/raw/national/ — re-running is safe
+and will skip already-cached requests. Club data (when added) lives at
+data/raw/club/ with the same endpoint-keyed subdirectory layout.
 """
 
 from __future__ import annotations
