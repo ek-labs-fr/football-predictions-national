@@ -43,7 +43,23 @@ cd infrastructure
 python -m pip install -r requirements.txt
 ```
 
-### 4. Bootstrap CDK in your account/region
+### 4. Install Docker Desktop and have it running
+
+`IngestStack` packages the Lambda as a container image (`DockerImageFunction`),
+so Docker is needed **before you bootstrap** — `cdk bootstrap` runs
+`python app.py` first to collect context, which loads the stack and therefore
+touches Docker during asset preparation. Without Docker, bootstrap hangs
+silently.
+
+Install from https://www.docker.com/products/docker-desktop/, launch it, and
+wait for the whale icon in the system tray to go steady. Then verify:
+
+```bash
+docker --version
+docker info
+```
+
+### 5. Bootstrap CDK in your account/region
 
 This creates the CDK deployment bucket, ECR repo for Lambda images, and IAM
 roles. Run once per (account, region) pair.
@@ -51,24 +67,82 @@ roles. Run once per (account, region) pair.
 ```bash
 cd infrastructure
 cdk bootstrap aws://<ACCOUNT_ID>/<REGION>
-# Example: cdk bootstrap aws://123456789012/eu-west-1
+# Example: cdk bootstrap aws://123456789012/eu-west-3
 ```
 
-### 5. Store the API-Football key in Secrets Manager
+### 6. Store the API-Football key in Secrets Manager
+
+Must be created in the **same region** as the stack. The Lambda reads the
+secret on cold start and caches it in memory.
+
+**bash / macOS / Linux:**
 
 ```bash
 aws secretsmanager create-secret \
   --name "football-predictions/api-football-key" \
-  --secret-string '{"api_key":"YOUR_API_FOOTBALL_KEY"}'
+  --description "API-Football v3 key for daily ingest Lambda" \
+  --secret-string '{"api_key":"YOUR_API_FOOTBALL_KEY"}' \
+  --region eu-west-3
 ```
 
-The Lambda reads the secret on cold start and caches it in memory.
+**PowerShell (Windows)** — avoids leaking the key to shell history and
+sidesteps nested-quote issues:
 
-### 6. Make sure Docker is running
+```powershell
+$key = Read-Host -AsSecureString "Paste your API-Football key"
+$plain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto(
+    [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($key)
+)
+$json = @{ api_key = $plain } | ConvertTo-Json -Compress
+$tmp = New-TemporaryFile
+Set-Content -Path $tmp -Value $json -Encoding ASCII -NoNewline
 
-`cdk deploy` builds the Lambda container image locally using Docker, then
-pushes it to ECR. Install Docker Desktop and have it running before the
-first deploy.
+aws secretsmanager create-secret `
+  --name "football-predictions/api-football-key" `
+  --description "API-Football v3 key for daily ingest Lambda" `
+  --secret-string "file://$tmp" `
+  --region eu-west-3
+
+Remove-Item $tmp
+Remove-Variable key, plain, json, tmp
+```
+
+## Troubleshooting
+
+### `cdk bootstrap` hangs with no output
+
+Happens when Docker isn't installed/running, because `cdk bootstrap` synths
+the app first and `IngestStack`'s `DockerImageFunction` asset preparation
+blocks on the Docker daemon. Fix: install Docker Desktop (step 4 above).
+
+If you need to bootstrap on a machine without Docker (e.g. CI that only
+deploys the toolkit), skip the CDK CLI and deploy the bootstrap template
+directly. The `CDKToolkit` stack is fully described by a static template
+that CDK can emit via `--show-template`:
+
+```powershell
+# 1. Emit the template using a minimal dummy app (bypasses IngestStack)
+#    Save this to bootstrap_app.py, next to cdk.json:
+#      import aws_cdk as cdk
+#      cdk.App().synth()
+
+cdk bootstrap --show-template --app "python bootstrap_app.py" `
+  | Out-File -Encoding ASCII bootstrap.yaml
+
+# 2. Deploy the CDKToolkit stack directly via CloudFormation
+aws cloudformation create-stack `
+  --stack-name CDKToolkit `
+  --template-body file://bootstrap.yaml `
+  --parameters ParameterKey=Qualifier,ParameterValue=hnb659fds `
+  --capabilities CAPABILITY_NAMED_IAM `
+  --region eu-west-3
+
+aws cloudformation wait stack-create-complete `
+  --stack-name CDKToolkit --region eu-west-3
+```
+
+`hnb659fds` is the default CDK bootstrap qualifier; `cdk deploy` expects
+this unless you override it with `--qualifier`.
 
 ## Deploy
 
