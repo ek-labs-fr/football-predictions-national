@@ -23,13 +23,18 @@ from __future__ import annotations
 
 import argparse
 import logging
+import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
+
+import pandas as pd
 
 from src.features.build import build_club_training_table, build_training_table
 from src.models.calibrate import fit_rho, save_calibration
 from src.models.evaluate import evaluate_all, get_classification_report
 from src.models.train import (
+    TrainedModel,
     create_split,
     save_model,
     train_baselines,
@@ -53,6 +58,37 @@ _ARTEFACTS_BY_MODE = {
     "national": Path("artefacts"),
     "club": Path("artefacts/club"),
 }
+
+_HISTORY_PATH = Path("outputs/training_history.csv")
+
+
+def _append_history(
+    comparison: pd.DataFrame,
+    mode: str,
+    best_model_name: str | None,
+    history_path: Path = _HISTORY_PATH,
+) -> None:
+    sha = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip() or "unknown"
+
+    row = comparison.copy()
+    row.insert(0, "timestamp", datetime.now(UTC).isoformat(timespec="seconds"))
+    row.insert(1, "mode", mode)
+    row.insert(2, "git_sha", sha)
+    row["is_best"] = row["model"] == best_model_name
+
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    row.to_csv(
+        history_path,
+        mode="a",
+        header=not history_path.exists(),
+        index=False,
+    )
+    logger.info("Appended %d rows to %s", len(row), history_path)
 
 
 def main(mode: str, skip_features: bool = False, skip_shap: bool = False) -> None:
@@ -93,12 +129,17 @@ def main(mode: str, skip_features: bool = False, skip_shap: bool = False) -> Non
 
     # Pick best Poisson model
     poisson_models = [m for m in all_models if m.is_poisson and m.model_home is not None]
+    best_model: TrainedModel | None = None
     if poisson_models:
         best_name = comparison.loc[
             comparison["model"].isin([m.name for m in poisson_models]),
             ["model", "mae_avg"],
         ].dropna().sort_values("mae_avg").iloc[0]["model"]
         best_model = next(m for m in poisson_models if m.name == best_name)
+
+    _append_history(comparison, mode, best_model.name if best_model else None)
+
+    if best_model is not None:
         logger.info("Best Poisson model: %s", best_model.name)
 
         report = get_classification_report(best_model, split)

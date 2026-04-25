@@ -51,6 +51,7 @@ coverage/
 # Outputs (keep .gitkeep)
 outputs/*
 !outputs/.gitkeep
+!outputs/training_history.csv
 
 # Model binaries
 *.pkl
