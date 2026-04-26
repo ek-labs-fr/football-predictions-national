@@ -19,7 +19,6 @@ from typing import Any
 
 import pandas as pd
 
-from src.data.ingest import _derive_outcome, _parse_stage
 from src.features import io
 
 logger = logging.getLogger(__name__)
@@ -31,6 +30,37 @@ _OUTPUT_BY_DOMAIN = {
     "national": "data/processed/all_fixtures.csv",
     "club": "data/processed/all_fixtures_club.csv",
 }
+
+
+def _parse_stage(round_str: str | None) -> str:
+    if not round_str:
+        return "unknown"
+    r = round_str.lower()
+    if "3rd" in r or "third" in r:
+        return "third_place"
+    if "semi" in r:
+        return "semifinal"
+    if "quarter" in r:
+        return "quarterfinal"
+    if "16" in r or "8th" in r:
+        return "round_of_16"
+    if "final" in r:
+        return "final"
+    if "group" in r:
+        return "group"
+    if "qualifying" in r or "qualif" in r:
+        return "qualifying"
+    return "group"
+
+
+def _derive_outcome(home_goals: int | None, away_goals: int | None) -> str | None:
+    if home_goals is None or away_goals is None:
+        return None
+    if home_goals > away_goals:
+        return "home_win"
+    if away_goals > home_goals:
+        return "away_win"
+    return "draw"
 
 
 def _row_from_fixture_item(item: dict[str, Any]) -> dict[str, Any]:
