@@ -1,5 +1,5 @@
 # Football Predictions National — World Cup Score & Tournament Predictor
-
+Eric
 ## Project Overview
 
 End-to-end production system for predicting national team football match **scorelines** using Poisson-based goal models, with derived outcome probabilities and Monte Carlo tournament simulation. Primary target: **FIFA World Cup 2026** (June–July 2026, USA/Canada/Mexico).
