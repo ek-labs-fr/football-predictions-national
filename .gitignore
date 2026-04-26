@@ -53,6 +53,12 @@ outputs/*
 !outputs/.gitkeep
 !outputs/training_history.csv
 
+# Local mirror of S3 web/data/ from dev runs of publish_dashboard_json
+web/
+
+# Local copy of dashboard JSON staged for `ng serve` preview
+src/ui/client/public/data/
+
 # Model binaries
 *.pkl
 *.joblib

@@ -1,5 +1,9 @@
 FROM public.ecr.aws/lambda/python:3.12
 
+# LightGBM needs the GNU OpenMP runtime (libgomp.so.1), absent from the
+# Lambda Python base image.
+RUN dnf install -y libgomp && dnf clean all
+
 WORKDIR /var/task
 
 COPY requirements.inference.txt ./
