@@ -15,6 +15,7 @@ from stacks.feature_stack import FeatureStack
 from stacks.hosting_stack import HostingStack
 from stacks.inference_stack import InferenceStack
 from stacks.ingest_stack import IngestStack
+from stacks.observability_stack import ObservabilityStack
 
 app = cdk.App()
 
@@ -53,6 +54,15 @@ HostingStack(
     "FPHostingStack",
     env=env,
     data_bucket_name=ingest.data_bucket.bucket_name,
+)
+
+ObservabilityStack(
+    app,
+    "FPObservabilityStack",
+    env=env,
+    ingest_state_machine_arn=ingest.state_machine.state_machine_arn,
+    ingest_function_name=ingest.ingest_function.function_name,
+    alert_email=app.node.try_get_context("alert_email") or "ekmillenium@hotmail.com",
 )
 
 app.synth()

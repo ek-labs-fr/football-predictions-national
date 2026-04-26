@@ -33,7 +33,32 @@ from src.data.incremental import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+_INGEST_NAMESPACE = "FootballPredictions/Ingest"
 _secret_cache: str | None = None
+_cw_client = None
+
+
+def _emit_metric(
+    name: str,
+    value: float,
+    dimensions: list[dict[str, str]] | None = None,
+    unit: str = "Count",
+) -> None:
+    global _cw_client
+    if _cw_client is None:
+        _cw_client = boto3.client("cloudwatch")
+    try:
+        _cw_client.put_metric_data(
+            Namespace=_INGEST_NAMESPACE,
+            MetricData=[{
+                "MetricName": name,
+                "Value": float(value),
+                "Unit": unit,
+                "Dimensions": dimensions or [],
+            }],
+        )
+    except Exception as exc:  # noqa: BLE001 — metrics must never break ingest
+        logger.warning("Failed to emit metric %s: %s", name, exc)
 
 
 def _get_api_key() -> str:
@@ -85,8 +110,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ANN
     s3 = boto3.client("s3")
     client = _build_client()
 
+    domain_dim = [{"Name": "Domain", "Value": domain}]
+
     if task == "fetch_fixtures_window":
         fixture_ids = fetch_fixtures_window(client, s3, bucket, domain)
+        _emit_metric("FixturesIngested", len(fixture_ids), domain_dim)
+        if client.last_quota_remaining is not None:
+            _emit_metric("ApiFootballRequestsRemaining", client.last_quota_remaining, unit="None")
         return {
             "task": task,
             "domain": domain,
@@ -102,6 +132,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:  # noqa: ANN
         # Mark these as seen in the manifest regardless of per-endpoint errors —
         # retrying the whole fixture next day just re-pulls the same data.
         total = update_manifest(s3, bucket, domain, fixture_ids)
+        if client.last_quota_remaining is not None:
+            _emit_metric("ApiFootballRequestsRemaining", client.last_quota_remaining, unit="None")
         return {
             "task": task,
             "domain": domain,

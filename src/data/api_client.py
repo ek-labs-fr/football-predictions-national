@@ -85,6 +85,9 @@ class APIFootballClient:
         self._request_count: int = 0
         # Rolling window timestamps for per-second and per-minute throttling
         self._timestamps: collections.deque[float] = collections.deque()
+        # Latest API-Football quota headers (None until the first non-cached request)
+        self.last_quota_remaining: int | None = None
+        self.last_quota_limit: int | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -179,6 +182,19 @@ class APIFootballClient:
     # HTTP with retries
     # ------------------------------------------------------------------
 
+    def _capture_quota_headers(self, headers: Any) -> None:
+        for header, attr in (
+            ("x-ratelimit-requests-remaining", "last_quota_remaining"),
+            ("x-ratelimit-requests-limit", "last_quota_limit"),
+        ):
+            raw = headers.get(header)
+            if raw is None:
+                continue
+            try:
+                setattr(self, attr, int(raw))
+            except (TypeError, ValueError):
+                continue
+
     def _request_with_retries(self, endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
         url = f"{self.base_url}{endpoint}"
         headers = {"x-apisports-key": self.api_key}
@@ -206,6 +222,7 @@ class APIFootballClient:
                     continue
 
                 resp.raise_for_status()
+                self._capture_quota_headers(resp.headers)
                 return resp.json()  # type: ignore[no-any-return]
 
             except requests.ConnectionError as exc:

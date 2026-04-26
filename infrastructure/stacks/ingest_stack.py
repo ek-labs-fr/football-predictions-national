@@ -23,6 +23,7 @@ from aws_cdk import (
     Stack,
     aws_events as events,
     aws_events_targets as targets,
+    aws_iam as iam,
     aws_lambda as _lambda,
     aws_s3 as s3,
     aws_secretsmanager as secretsmanager,
@@ -106,6 +107,17 @@ class IngestStack(Stack):
         )
         data_bucket.grant_read_write(ingest_fn)
         api_secret.grant_read(ingest_fn)
+        ingest_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["cloudwatch:PutMetricData"],
+                resources=["*"],
+                conditions={
+                    "StringEquals": {
+                        "cloudwatch:namespace": "FootballPredictions/Ingest",
+                    },
+                },
+            ),
+        )
 
         # --- Step Functions ---------------------------------------------------
         def _invoke(id_: str, payload: dict) -> tasks.LambdaInvoke:
