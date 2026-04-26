@@ -18,6 +18,7 @@ export interface MatchPrediction {
   p_draw: number;
   p_away_win: number;
   predicted_outcome: Outcome;
+  prediction_made_at?: string;
   actual_home_goals?: number;
   actual_away_goals?: number;
   actual_score?: string;
@@ -41,6 +42,14 @@ export interface UpcomingResponse {
   matches: MatchPrediction[];
 }
 
+export interface RecentResponse {
+  competition_id: string;
+  competition_name: string;
+  window_days: number;
+  matches: MatchPrediction[];
+  performance: PerformanceSummary;
+}
+
 export interface PastResponse {
   competition_id: string;
   competition_name: string;
@@ -54,7 +63,9 @@ export interface Competition {
   name: string;
   mode: 'national' | 'club';
   past_label: string;
+  recent_window_days: number;
   upcoming_count: number;
+  recent_count: number;
   past_count: number;
 }
 
@@ -70,6 +81,10 @@ export class PredictionService {
 
   getUpcoming(competitionId: string): Observable<UpcomingResponse> {
     return this.http.get<UpcomingResponse>(`${this.dataUrl}/upcoming_${competitionId}.json`);
+  }
+
+  getRecent(competitionId: string): Observable<RecentResponse> {
+    return this.http.get<RecentResponse>(`${this.dataUrl}/recent_${competitionId}.json`);
   }
 
   getPast(competitionId: string): Observable<PastResponse> {

@@ -10,6 +10,7 @@ import { PerformanceSummaryComponent } from '../../shared/components/performance
 import {
   PastResponse,
   PredictionService,
+  RecentResponse,
   UpcomingResponse,
 } from '../../services/prediction.service';
 
@@ -31,7 +32,7 @@ import {
       <a mat-icon-button routerLink="/" aria-label="Back">
         <mat-icon>arrow_back</mat-icon>
       </a>
-      <h2>{{ upcoming?.competition_name || past?.competition_name || 'Competition' }}</h2>
+      <h2>{{ competitionName }}</h2>
     </div>
 
     @if (loading) {
@@ -52,7 +53,25 @@ import {
           </div>
         </mat-tab>
 
-        <mat-tab [label]="'Past (' + (past?.matches?.length ?? 0) + ')'">
+        <mat-tab [label]="'Recently played (' + (recent?.matches?.length ?? 0) + ')'">
+          <div class="tab-content">
+            @if (recent && recent.matches.length > 0) {
+              <app-performance-summary
+                [perf]="recent.performance"
+                [label]="'Last ' + recent.window_days + ' days'"
+              />
+              @for (m of recent.matches; track m.fixture_id) {
+                <app-match-card [match]="m" />
+              }
+            } @else {
+              <p class="empty">
+                No recently-played fixtures yet. This view fills as matches finish.
+              </p>
+            }
+          </div>
+        </mat-tab>
+
+        <mat-tab [label]="'Holdout (' + (past?.matches?.length ?? 0) + ')'">
           <div class="tab-content">
             @if (past && past.matches.length > 0) {
               <app-performance-summary [perf]="past.performance" [label]="past.label" />
@@ -60,7 +79,7 @@ import {
                 <app-match-card [match]="m" />
               }
             } @else {
-              <p class="empty">No past results yet.</p>
+              <p class="empty">No holdout results.</p>
             }
           </div>
         </mat-tab>
@@ -83,6 +102,7 @@ import {
 })
 export class CompetitionDetailComponent implements OnInit {
   upcoming: UpcomingResponse | null = null;
+  recent: RecentResponse | null = null;
   past: PastResponse | null = null;
   loading = true;
   error: string | null = null;
@@ -92,6 +112,15 @@ export class CompetitionDetailComponent implements OnInit {
     private predictionService: PredictionService,
   ) {}
 
+  get competitionName(): string {
+    return (
+      this.upcoming?.competition_name ||
+      this.recent?.competition_name ||
+      this.past?.competition_name ||
+      'Competition'
+    );
+  }
+
   ngOnInit(): void {
     const id = this.route.snapshot.paramMap.get('id');
     if (!id) {
@@ -100,16 +129,20 @@ export class CompetitionDetailComponent implements OnInit {
       return;
     }
 
-    let pending = 2;
+    let pending = 3;
     const done = () => { pending -= 1; if (pending === 0) this.loading = false; };
 
     this.predictionService.getUpcoming(id).subscribe({
       next: data => { this.upcoming = data; done(); },
       error: () => { this.error = 'Failed to load upcoming fixtures.'; done(); },
     });
+    this.predictionService.getRecent(id).subscribe({
+      next: data => { this.recent = data; done(); },
+      error: () => { done(); },
+    });
     this.predictionService.getPast(id).subscribe({
       next: data => { this.past = data; done(); },
-      error: () => { this.error = 'Failed to load past results.'; done(); },
+      error: () => { this.error = 'Failed to load holdout results.'; done(); },
     });
   }
 }

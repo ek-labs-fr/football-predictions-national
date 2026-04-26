@@ -33,8 +33,12 @@ import { Competition, PredictionService } from '../../services/prediction.servic
                   <span class="lbl">upcoming</span>
                 </div>
                 <div class="count">
+                  <span class="num">{{ comp.recent_count }}</span>
+                  <span class="lbl">recent</span>
+                </div>
+                <div class="count">
                   <span class="num">{{ comp.past_count }}</span>
-                  <span class="lbl">past</span>
+                  <span class="lbl">holdout</span>
                 </div>
               </div>
               <div class="hint">{{ comp.past_label }}</div>
