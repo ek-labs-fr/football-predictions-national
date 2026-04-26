@@ -100,12 +100,24 @@ def _list_fixture_keys(domain: str) -> list[str]:
 
 
 def _run_date_from_key(key: str) -> str:
+    """Sortable run-date for dedup. Daily snapshots use ISO dates so they
+    sort lexicographically. The bootstrap ``historical/`` snapshots are
+    mapped to an empty string so they sort *before* every date — meaning
+    any subsequent daily snapshot overrides their status (the bug fix:
+    'historical' as a literal sorted *after* '2026-04-XX', so stale NS
+    rows from the bootstrap were winning over fresh FT rows).
+    """
     parts = key.replace("\\", "/").split("/")
     try:
         idx = parts.index("fixtures") + 1
-        return parts[idx] if idx < len(parts) else ""
     except ValueError:
         return ""
+    if idx >= len(parts):
+        return ""
+    segment = parts[idx]
+    if segment == "historical":
+        return ""
+    return segment
 
 
 def rebuild_fixtures_csv(domain: str) -> int:
