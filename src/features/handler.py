@@ -45,6 +45,7 @@ from src.features.build import (
     build_training_table,
 )
 from src.features.h2h import compute_h2h_features
+from src.features.rebuild import rebuild_fixtures_csv
 from src.features.rolling import compute_rolling_features
 from src.features.squad import compute_squad_features
 from src.features.tournament import compute_tournament_features
@@ -67,6 +68,9 @@ def _also_parquet(csv_key: str) -> None:
 
 def _run_national() -> dict[str, int]:
     counts: dict[str, int] = {}
+
+    logger.info("=== Step 0 — rebuild all_fixtures.csv from raw JSONs ===")
+    counts["all_fixtures"] = rebuild_fixtures_csv("national")
 
     logger.info("=== Step 2.1 — rolling features ===")
     rolling = compute_rolling_features()
@@ -104,6 +108,9 @@ def _run_national() -> dict[str, int]:
 def _run_club() -> dict[str, int]:
     """Club pipeline — skips tournament/Elo/FIFA, writes *_club outputs."""
     counts: dict[str, int] = {}
+
+    logger.info("=== Club: rebuild all_fixtures_club.csv from raw JSONs ===")
+    counts["all_fixtures_club"] = rebuild_fixtures_csv("club")
 
     logger.info("=== Club: rolling features ===")
     rolling = compute_rolling_features(
