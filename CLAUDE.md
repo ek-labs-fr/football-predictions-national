@@ -1,4 +1,4 @@
-# Football Predictions National — World Cup Score & Tournament Predictor
+# Football Predictions National — World Cup Score & Tournament Predictor test
 
 ## Project Overview
 
