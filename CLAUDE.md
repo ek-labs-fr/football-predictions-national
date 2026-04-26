@@ -1,4 +1,4 @@
-# Football Predictions National — World Cup Score & Tournament Predictor
+# Eric FC - Football Predictions
 
 ## Project Overview
 
