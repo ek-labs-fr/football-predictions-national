@@ -102,10 +102,21 @@ class Competition:
     mode: str
     league_id: int
     past_label: str
+    # Cap on how many upcoming fixtures the UI should render. None = no cap
+    # (the UI's default time-window filter applies). Set for tournaments
+    # whose fixtures cluster outside the default 7-day window.
+    upcoming_display_limit: int | None = None
 
 
 COMPETITIONS: list[Competition] = [
-    Competition("wc-2026", "FIFA World Cup 2026", "national", 1, "Holdout: World Cup 2022"),
+    Competition(
+        "wc-2026",
+        "FIFA World Cup 2026",
+        "national",
+        1,
+        "Holdout: World Cup 2022",
+        upcoming_display_limit=12,
+    ),
     Competition("premier-league", "Premier League", "club", 39, "Holdout: 2024–25 season"),
     Competition("la-liga", "La Liga", "club", 140, "Holdout: 2024–25 season"),
     Competition("ligue-1", "Ligue 1", "club", 61, "Holdout: 2024–25 season"),
@@ -675,6 +686,7 @@ def publish_dashboard_json() -> dict[str, object]:
                 "past_label": comp.past_label,
                 "recent_window_days": _RECENT_WINDOW_DAYS,
                 "upcoming_count": len(upcoming_payload["matches"]),
+                "upcoming_display_limit": comp.upcoming_display_limit,
                 "recent_count": len(recent_payload["matches"]),
                 "past_count": len(past_payload["matches"]),
             }

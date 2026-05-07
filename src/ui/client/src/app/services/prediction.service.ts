@@ -70,6 +70,7 @@ export interface Competition {
   past_label: string;
   recent_window_days: number;
   upcoming_count: number;
+  upcoming_display_limit?: number | null;
   recent_count: number;
   past_count: number;
 }

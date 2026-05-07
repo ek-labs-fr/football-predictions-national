@@ -56,9 +56,7 @@ const DEFAULT_LEAGUE = 'premier-league';
               }
             </div>
           } @else if (visibleUpcoming().length === 0) {
-            <p class="empty">
-              {{ upcomingMatches().length === 0 ? 'No upcoming fixtures.' : 'No fixtures in the next 7 days.' }}
-            </p>
+            <p class="empty">{{ upcomingEmptyMessage() }}</p>
           } @else {
             <div class="grid">
               @for (m of visibleUpcoming(); track m.fixture_id) {
@@ -209,12 +207,27 @@ export class HomeComponent implements OnInit {
   readonly visibleUpcoming = computed<UpcomingResponse['matches']>(() => {
     const matches = this.upcomingMatches();
     const now = Date.now();
+    const limit = this.selectedCompetition()?.upcoming_display_limit ?? null;
+    const future = matches
+      .filter(m => {
+        if (!m.date) return false;
+        const ts = new Date(m.date).getTime();
+        return !isNaN(ts) && ts >= now;
+      })
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    if (limit && limit > 0) {
+      return future.slice(0, limit);
+    }
+
     const cutoff = now + 7 * 24 * 60 * 60 * 1000;
-    return matches.filter(m => {
-      if (!m.date) return false;
-      const ts = new Date(m.date).getTime();
-      return !isNaN(ts) && ts >= now && ts <= cutoff;
-    });
+    return future.filter(m => new Date(m.date).getTime() <= cutoff);
+  });
+
+  readonly upcomingEmptyMessage = computed<string>(() => {
+    if (this.upcomingMatches().length === 0) return 'No upcoming fixtures.';
+    const limit = this.selectedCompetition()?.upcoming_display_limit ?? null;
+    return limit && limit > 0 ? 'No upcoming fixtures.' : 'No fixtures in the next 7 days.';
   });
 
   readonly visibleRecent = computed<RecentResponse['matches']>(() => {
