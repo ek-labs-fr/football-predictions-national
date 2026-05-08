@@ -40,7 +40,7 @@ features = FeatureStack(
     ingest_state_machine_arn=ingest.state_machine.state_machine_arn,
 )
 
-InferenceStack(
+inference = InferenceStack(
     app,
     "FPInferenceStack",
     env=env,
@@ -54,6 +54,8 @@ ObservabilityStack(
     env=env,
     ingest_state_machine_arn=ingest.state_machine.state_machine_arn,
     ingest_function_name=ingest.ingest_function.function_name,
+    feature_function_name=features.feature_function.function_name,
+    inference_function_name=inference.inference_function.function_name,
     alert_email=app.node.try_get_context("alert_email") or "ekmillenium@hotmail.com",
 )
 

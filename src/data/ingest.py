@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
-from src.data.api_client import APIFootballClient  # noqa: TCH001
+if TYPE_CHECKING:
+    from src.data.api_client import APIFootballClient
+
 from src.data.schemas import (
     Fixture,
     FixtureEvent,

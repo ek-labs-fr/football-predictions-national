@@ -1,18 +1,28 @@
-"""ObservabilityStack — alarms + dashboard for the daily ingest pipeline.
+"""ObservabilityStack — alarms + dashboard for the daily pipeline.
+
+Covers the full ingest → feature → inference chain. The earlier version
+only watched the ingest leg, which let a silent FeatureFunction crash-loop
+go unnoticed for ~36h while the dashboard JSON went stale on S3.
 
 Components:
     * SNS topic ``IngestAlerts`` with email subscription
-    * Five CloudWatch alarms wired to SNS:
+    * CloudWatch alarms wired to SNS:
         - IngestExecutionFailed       — Step Functions FailedExecutions > 0
         - IngestStale                 — no execution started in the last 25h
         - IngestLambdaErrors          — Ingest Lambda Errors > 0
+        - FeatureLambdaErrors         — Feature Lambda Errors > 0
+        - InferenceLambdaErrors       — Inference Lambda Errors > 0
+        - InferenceStale              — Inference Lambda hasn't been
+                                        invoked in the last 25h (catches
+                                        silent breaks in the feature →
+                                        inference EventBridge link)
         - ApiQuotaLow                 — < 20% requests remaining (custom metric)
         - FixturesIngestedDrop        — < 1 fixture/day (custom metric, per domain)
     * CloudWatch dashboard for at-a-glance status
 
 Custom metrics are emitted by src/data/lambda_handlers.py under the
 ``FootballPredictions/Ingest`` namespace. Free-tier coverage:
-- 10 free CW alarms/month (we use 5)
+- 10 free CW alarms/month (we use 8)
 - 10 free custom metrics/month (we use 3 — FixturesIngested×2 domains + quota)
 - 1k free SNS email notifications/month
 """
@@ -54,6 +64,8 @@ class ObservabilityStack(Stack):
         *,
         ingest_state_machine_arn: str,
         ingest_function_name: str,
+        feature_function_name: str,
+        inference_function_name: str,
         alert_email: str,
         **kwargs,
     ) -> None:
@@ -83,11 +95,24 @@ class ObservabilityStack(Stack):
         )
 
         # --- Lambda metrics ---------------------------------------------------
-        lambda_errors = cw.Metric(
+        def lambda_errors_metric(function_name: str) -> cw.Metric:
+            return cw.Metric(
+                namespace="AWS/Lambda",
+                metric_name="Errors",
+                dimensions_map={"FunctionName": function_name},
+                period=Duration.hours(1),
+                statistic="Sum",
+            )
+
+        lambda_errors = lambda_errors_metric(ingest_function_name)
+        feature_errors = lambda_errors_metric(feature_function_name)
+        inference_errors = lambda_errors_metric(inference_function_name)
+
+        inference_invocations = cw.Metric(
             namespace="AWS/Lambda",
-            metric_name="Errors",
-            dimensions_map={"FunctionName": ingest_function_name},
-            period=Duration.hours(1),
+            metric_name="Invocations",
+            dimensions_map={"FunctionName": inference_function_name},
+            period=Duration.hours(25),
             statistic="Sum",
         )
 
@@ -144,6 +169,45 @@ class ObservabilityStack(Stack):
             comparison_operator=cw.ComparisonOperator.GREATER_THAN_THRESHOLD,
             treat_missing_data=cw.TreatMissingData.NOT_BREACHING,
             alarm_description="Ingest Lambda emitted an error in the last hour.",
+        )
+        alarms.append(a)
+
+        a = cw.Alarm(
+            self,
+            "FeatureLambdaErrors",
+            metric=feature_errors,
+            evaluation_periods=1,
+            threshold=0,
+            comparison_operator=cw.ComparisonOperator.GREATER_THAN_THRESHOLD,
+            treat_missing_data=cw.TreatMissingData.NOT_BREACHING,
+            alarm_description="Feature Lambda emitted an error in the last hour.",
+        )
+        alarms.append(a)
+
+        a = cw.Alarm(
+            self,
+            "InferenceLambdaErrors",
+            metric=inference_errors,
+            evaluation_periods=1,
+            threshold=0,
+            comparison_operator=cw.ComparisonOperator.GREATER_THAN_THRESHOLD,
+            treat_missing_data=cw.TreatMissingData.NOT_BREACHING,
+            alarm_description="Inference Lambda emitted an error in the last hour.",
+        )
+        alarms.append(a)
+
+        a = cw.Alarm(
+            self,
+            "InferenceStale",
+            metric=inference_invocations,
+            evaluation_periods=1,
+            threshold=1,
+            comparison_operator=cw.ComparisonOperator.LESS_THAN_THRESHOLD,
+            treat_missing_data=cw.TreatMissingData.BREACHING,
+            alarm_description=(
+                "Inference Lambda hasn't been invoked in the last 25h — "
+                "the feature → inference EventBridge link may be broken."
+            ),
         )
         alarms.append(a)
 
