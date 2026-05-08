@@ -125,11 +125,16 @@ class ObservabilityStack(Stack):
         )
 
         def fixtures_ingested(domain: str) -> cw.Metric:
+            # 7-day rolling sum: the metric counts *newly completed* fixtures
+            # (fixture IDs not yet in the manifest), so a 1-day window has
+            # legitimate zeros on mid-week days with no completed matches.
+            # Catching a real ingestion outage requires summing over a full
+            # match week.
             return cw.Metric(
                 namespace="FootballPredictions/Ingest",
                 metric_name="FixturesIngested",
                 dimensions_map={"Domain": domain},
-                period=Duration.days(1),
+                period=Duration.days(7),
                 statistic="Sum",
             )
 
@@ -235,8 +240,9 @@ class ObservabilityStack(Stack):
                 comparison_operator=cw.ComparisonOperator.LESS_THAN_THRESHOLD,
                 treat_missing_data=cw.TreatMissingData.BREACHING,
                 alarm_description=(
-                    f"No fixtures ingested for {domain} in the last 24h — "
-                    "data feed may be silently failing."
+                    f"No fixtures ingested for {domain} in the last 7 days — "
+                    "data feed may be silently failing or this league is "
+                    "off-season."
                 ),
             )
             alarms.append(a)
