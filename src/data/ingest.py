@@ -753,33 +753,38 @@ def pull_match_statistics(
 
 
 def build_club_match_statistics_from_cache(
-    cache_dir: Path = Path("data/raw/club/fixtures_statistics"),
-    output_path: Path = PROCESSED_DIR / "match_statistics_club.csv",
+    output_path: str = "data/processed/match_statistics_club.csv",
 ) -> pd.DataFrame:
     """Parse cached /fixtures/statistics responses into a flat club CSV.
 
-    Mirrors the columns produced by ``pull_match_statistics`` but reads from the
-    local raw cache instead of hitting the API. Run after raw responses have
-    been fetched (via ``bootstrap_data.py`` or ``catchup_fixtures.py``).
+    Mirrors the columns produced by ``pull_match_statistics`` but reads from
+    the cached responses rather than hitting the API. I/O goes through
+    ``src.features.io`` so the same code runs locally (DATA_BUCKET unset →
+    ``data/raw/club/fixtures_statistics/``) and in Lambda (DATA_BUCKET set →
+    S3 prefix ``club/fixtures_statistics/``).
 
     xG (``home_xg`` / ``away_xg``) is only present from 2023 onward in
     API-Football's coverage of PL / La Liga / Ligue 1; older fixtures have
     NaN.
     """
-    files = sorted(cache_dir.glob("*.json"))
-    if not files:
-        logger.warning("No cached statistics files in %s", cache_dir)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+    from src.features import io
+
+    cache_prefix = (
+        "club/fixtures_statistics" if io.using_s3() else "data/raw/club/fixtures_statistics"
+    )
+    keys = [k for k in io.list_keys(cache_prefix) if k.endswith(".json")]
+
+    if not keys:
+        logger.warning("No cached statistics files under %s", cache_prefix)
         empty = pd.DataFrame()
-        empty.to_csv(output_path, index=False)
+        io.write_csv(output_path, empty)
         return empty
 
     rows: list[dict[str, Any]] = []
     skipped = 0
-    for f in files:
+    for key in keys:
         try:
-            with f.open(encoding="utf-8") as fh:
-                data = json.load(fh)
+            data = io.read_json(key)
         except (json.JSONDecodeError, OSError):
             skipped += 1
             continue
@@ -809,12 +814,11 @@ def build_club_match_statistics_from_cache(
             rows.append(extracted)
 
     df = pd.DataFrame(rows).drop_duplicates(subset=["fixture_id"])
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(output_path, index=False)
+    io.write_csv(output_path, df)
     logger.info(
         "Built club match-stats CSV: %d rows from %d files (skipped=%d) -> %s",
         len(df),
-        len(files),
+        len(keys),
         skipped,
         output_path,
     )
