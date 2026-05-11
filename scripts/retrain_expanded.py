@@ -205,22 +205,31 @@ def main() -> None:
     df["date"] = pd.to_datetime(df["date"], utc=True)
     df = df.sort_values("date").reset_index(drop=True)
 
-    # Three holdouts
-    wc2022 = df[(df["league_id"] == 1) & (df["season"] == 2022)].copy()
-    euro2024 = df[(df["league_id"] == 4) & (df["season"] == 2024)].copy()
-    copa2024 = df[(df["league_id"] == 6) & (df["season"] == 2024)].copy()
-    emit(
-        f"WC 2022 holdout:        N={len(wc2022)} "
-        f"({wc2022['date'].min().date()} .. {wc2022['date'].max().date()})"
-    )
-    emit(
-        f"Euro 2024 holdout:      N={len(euro2024)} "
-        f"({euro2024['date'].min().date()} .. {euro2024['date'].max().date()})"
-    )
-    emit(
-        f"Copa America 2024:      N={len(copa2024)} "
-        f"({copa2024['date'].min().date()} .. {copa2024['date'].max().date()})"
-    )
+    def _slice(league_id: int, season: int) -> pd.DataFrame:
+        return df[(df["league_id"] == league_id) & (df["season"] == season)].copy()
+
+    def _describe(label: str, sub: pd.DataFrame) -> str:
+        if sub.empty:
+            return f"{label:<22s} N=0 (empty)"
+        return (
+            f"{label:<22s} N={len(sub):>3d} "
+            f"({sub['date'].min().date()} .. {sub['date'].max().date()})"
+        )
+
+    holdout_specs: list[tuple[str, int, int]] = [
+        ("WC 2022", 1, 2022),
+        ("Euro 2024", 4, 2024),
+        ("Copa America 2024", 9, 2024),
+        ("Olympics Men 2024", 480, 2024),
+        ("Gold Cup 2025", 22, 2025),
+        ("AFCON 2025", 6, 2025),
+    ]
+    holdouts: list[tuple[str, pd.DataFrame]] = []
+    for label, lid, season in holdout_specs:
+        sub = _slice(lid, season)
+        emit(_describe(label, sub))
+        if not sub.empty:
+            holdouts.append((label, sub))
     emit("")
 
     # Model A: production-equivalent — train on date < 2022-11-20
@@ -229,13 +238,13 @@ def main() -> None:
     medians_a = train_a[feat_cols_a].median()
     pair_a = _train_pair(train_a, feat_cols_a, medians_a, "production_equivalent")
 
-    # Model B: expanded — train on date < 2024-06-14, excluding both holdouts
+    # Model B: expanded — train on date < 2024-06-14, but always exclude
+    # the holdout (league_id, season) combos even if a few of their fixtures
+    # accidentally pre-date the cutoff.
     expand_cutoff = pd.Timestamp("2024-06-14", tz="UTC")
-    train_b_mask = (
-        (df["date"] < expand_cutoff)
-        & ~((df["league_id"] == 4) & (df["season"] == 2024))
-        & ~((df["league_id"] == 6) & (df["season"] == 2024))
-    )
+    train_b_mask = df["date"] < expand_cutoff
+    for _label, lid, season in holdout_specs:
+        train_b_mask &= ~((df["league_id"] == lid) & (df["season"] == season))
     train_b = df[train_b_mask].copy()
     feat_cols_b = get_feature_columns(train_b, mode="national")
     medians_b = train_b[feat_cols_b].median()
@@ -254,11 +263,9 @@ def main() -> None:
     )
     emit("")
 
-    # Evaluate each pair on each unseen holdout.
-    # Note: model A has not seen WC 2022, Euro 2024, or Copa 2024 (all unseen).
-    # Model B has not seen Euro 2024 or Copa 2024 BUT has seen WC 2022.
+    # Evaluate each pair on every holdout.
+    # Note: model B has seen WC 2022 in train (cutoff is 2024-06-14).
     # So WC 2022 metrics for B reflect train performance, not generalization.
-    holdouts = [("WC 2022", wc2022), ("Euro 2024", euro2024), ("Copa America 2024", copa2024)]
     results: dict[tuple[str, str], dict] = {}
     for pair in (pair_a, pair_b):
         for label, ho in holdouts:
