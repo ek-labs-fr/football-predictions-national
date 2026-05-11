@@ -151,6 +151,24 @@ def _load_artefacts(
 
 _OUTCOMES = ("home_win", "draw", "away_win")
 
+_TOP_K_SCORELINES = 3
+
+
+def _top_k_scorelines(mat: np.ndarray, k: int = _TOP_K_SCORELINES) -> list[dict]:
+    """Return the k most probable scoreline cells, sorted by probability desc."""
+    flat = mat.ravel()
+    take = min(k, flat.size)
+    partition = np.argpartition(flat, -take)[-take:]
+    ordered = partition[np.argsort(-flat[partition])]
+    ncols = mat.shape[1]
+    return [
+        {
+            "score": f"{int(idx // ncols)}-{int(idx % ncols)}",
+            "probability": round(float(flat[idx]), 4),
+        }
+        for idx in ordered
+    ]
+
 
 def _modal_scoreline(
     mat: np.ndarray,
@@ -209,6 +227,7 @@ def _predict_rows(
     p_h: list[float] = []
     p_d: list[float] = []
     p_a: list[float] = []
+    top_scorelines: list[list[dict]] = []
     for h, a in zip(lh, la, strict=True):
         mat = _bivariate_poisson_matrix(h, a, rho)
         ph = float(np.tril(mat, -1).sum())
@@ -219,6 +238,7 @@ def _predict_rows(
         p_h.append(ph)
         p_d.append(pd_)
         p_a.append(pa)
+        top_scorelines.append(_top_k_scorelines(mat))
 
     out = rows.copy()
     out["lambda_home"] = np.round(lh, 3)
@@ -229,6 +249,7 @@ def _predict_rows(
     out["p_away_win"] = np.round(p_a, 4)
     probs = np.column_stack([p_h, p_d, p_a])
     out["predicted_outcome"] = [_OUTCOMES[i] for i in probs.argmax(axis=1)]
+    out["top_scorelines"] = top_scorelines
     return out
 
 
@@ -245,6 +266,7 @@ _PREDICTION_FIELDS = (
     "p_draw",
     "p_away_win",
     "predicted_outcome",
+    "top_scorelines",
 )
 
 
@@ -576,6 +598,7 @@ _UPCOMING_COLS = [
     "away_team_id",
     "away_team_name",
     "predicted_score",
+    "top_scorelines",
     "lambda_home",
     "lambda_away",
     "p_home_win",
@@ -603,6 +626,11 @@ def _to_records(df: pd.DataFrame, columns: list[str]) -> list[dict]:
         sub["date"] = pd.to_datetime(sub["date"], utc=True).dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
     for c in sub.select_dtypes(include="bool").columns:
         sub[c] = sub[c].astype(bool)
+    if "top_scorelines" in sub.columns:
+        # Legacy frozen predictions written before top_scorelines existed come
+        # back as NaN; coerce to None so json.dumps emits null, not the invalid
+        # NaN literal.
+        sub["top_scorelines"] = sub["top_scorelines"].where(sub["top_scorelines"].notna(), None)
     return sub.to_dict(orient="records")
 
 
