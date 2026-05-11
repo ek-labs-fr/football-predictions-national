@@ -43,15 +43,26 @@ CLUB_LEAGUE_SEASONS: list[tuple[int, int]] = [
     (140, 2025),  # La Liga
 ]
 
-# National competitions — same 8 leagues used for model training. Season
-# values cover the ongoing 2025-2026 tournament calendar.
+# National competitions used for model training. Season values cover the
+# ongoing 2025-2026 tournament calendar plus the WC 2026 qualifying paths
+# across every confederation.
 NATIONAL_LEAGUE_SEASONS: list[tuple[int, int]] = [
-    (1, 2026),  # World Cup 2026
-    (4, 2024),  # EURO 2024 (tail end of post-tournament reporting)
-    (5, 2024),  # Nations League 2024-25
-    (9, 2024),  # Copa America 2024
-    (10, 2023),  # Asian Cup 2023
-    (11, 2026),  # Friendlies 2026
+    (1, 2026),    # World Cup 2026
+    (4, 2024),    # EURO 2024 (tail end of post-tournament reporting)
+    (5, 2024),    # Nations League 2024-25
+    (6, 2025),    # AFCON 2025 (played late 2025 / early 2026)
+    (9, 2024),    # Copa America 2024
+    (10, 2023),   # Asian Cup 2023
+    (11, 2026),   # Friendlies / CONMEBOL legacy bucket
+    (22, 2025),   # CONCACAF Gold Cup 2025
+    (29, 2023),   # WC Qualification — Africa
+    (30, 2026),   # WC Qualification — Asia
+    (31, 2026),   # WC Qualification — CONCACAF
+    (32, 2024),   # WC Qualification — Europe
+    (33, 2026),   # WC Qualification — Oceania
+    (34, 2026),   # WC Qualification — South America
+    (37, 2026),   # WC Qualification — Intercontinental Play-offs
+    (480, 2024),  # Olympics Men 2024
 ]
 
 LEAGUE_SEASONS_BY_DOMAIN = {

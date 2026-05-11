@@ -24,7 +24,25 @@ from src.features import io
 logger = logging.getLogger(__name__)
 
 
-_NATIONAL_LEAGUE_IDS = {1, 4, 5, 6, 7, 9, 10, 11}
+_NATIONAL_LEAGUE_IDS = {
+    1,    # World Cup
+    4,    # Euro Championship
+    5,    # UEFA Nations League
+    6,    # Africa Cup of Nations
+    7,    # Asian Cup
+    9,    # Copa America
+    10,   # Friendlies (international, generic bucket)
+    11,   # CONMEBOL Qualifying (pre-2026 numbering kept for back-compat)
+    22,   # CONCACAF Gold Cup
+    29,   # WC Qualification — Africa
+    30,   # WC Qualification — Asia
+    31,   # WC Qualification — CONCACAF
+    32,   # WC Qualification — Europe
+    33,   # WC Qualification — Oceania
+    34,   # WC Qualification — South America
+    37,   # WC Qualification — Intercontinental Play-offs
+    480,  # Olympics Men
+}
 
 _OUTPUT_BY_DOMAIN = {
     "national": "data/processed/all_fixtures.csv",

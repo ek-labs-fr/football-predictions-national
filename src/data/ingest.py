@@ -32,10 +32,19 @@ COMPETITION_IDS: dict[str, int] = {
     "EURO": 4,
     "Nations League": 5,
     "AFCON": 6,
-    "Gold Cup": 7,
+    "Asian Cup": 7,
     "Copa America": 9,
-    "Asian Cup": 10,
-    "Friendlies": 11,
+    "Friendlies International": 10,
+    "Friendlies (legacy)": 11,
+    "CONCACAF Gold Cup": 22,
+    "WC Qualification Africa": 29,
+    "WC Qualification Asia": 30,
+    "WC Qualification CONCACAF": 31,
+    "WC Qualification Europe": 32,
+    "WC Qualification Oceania": 33,
+    "WC Qualification South America": 34,
+    "WC Qualification Intercontinental Play-offs": 37,
+    "Olympics Men": 480,
 }
 
 # Seasons to pull per competition
@@ -43,11 +52,20 @@ COMPETITION_SEASONS: dict[int, list[int]] = {
     1: [1990, 1994, 1998, 2002, 2006, 2010, 2014, 2018, 2022],  # World Cup
     4: [2000, 2004, 2008, 2012, 2016, 2020, 2024],  # EURO
     5: [2018, 2020, 2022, 2024],  # Nations League
-    6: [2002, 2004, 2006, 2008, 2010, 2012, 2013, 2015, 2017, 2019, 2021, 2023],  # AFCON
-    7: [2002, 2003, 2005, 2007, 2009, 2011, 2013, 2015, 2017, 2019, 2021, 2023],  # Gold Cup
+    6: [2002, 2004, 2006, 2008, 2010, 2012, 2013, 2015, 2017, 2019, 2021, 2023, 2025],  # AFCON
+    7: [2002, 2003, 2005, 2007, 2009, 2011, 2013, 2015, 2017, 2019, 2021, 2023],  # Asian Cup
     9: [2001, 2004, 2007, 2011, 2015, 2016, 2019, 2021, 2024],  # Copa America
-    10: [2004, 2007, 2011, 2015, 2019, 2023],  # Asian Cup
-    11: list(range(2010, 2026)),  # Friendlies 2010–2025
+    10: [2004, 2007, 2011, 2015, 2019, 2023],  # Friendlies / generic
+    11: list(range(2010, 2026)),  # Friendlies / CONMEBOL legacy 2010–2025
+    22: [2023, 2025],  # CONCACAF Gold Cup
+    29: [2023],  # WC Qualification Africa
+    30: [2026],  # WC Qualification Asia
+    31: [2026],  # WC Qualification CONCACAF
+    32: [2024],  # WC Qualification Europe
+    33: [2026],  # WC Qualification Oceania
+    34: [2026],  # WC Qualification South America
+    37: [2026],  # WC Qualification Intercontinental Play-offs
+    480: [2024],  # Olympics Men
 }
 
 PROCESSED_DIR = Path("data/processed")
