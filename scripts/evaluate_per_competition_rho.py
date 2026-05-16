@@ -231,9 +231,7 @@ def main() -> None:
     for cfg in configs:
         rc = cfg.rho_config
         if rc.by_bucket:
-            bucket_str = ", ".join(
-                f"{b}={v:+.4f}" for b, v in sorted(rc.by_bucket.items())
-            )
+            bucket_str = ", ".join(f"{b}={v:+.4f}" for b, v in sorted(rc.by_bucket.items()))
             rho_desc = f"default={rc.default:+.4f}; {bucket_str}"
         else:
             rho_desc = f"scalar ρ={rc.default:+.4f}"

@@ -228,9 +228,7 @@ def fit_rho_per_bucket(
     league_to_bucket = {int(lid): b for b, lids in buckets.items() for lid in lids}
 
     default_rho, default_loss = _fit_rho_brier(lambdas_home, lambdas_away, is_draw)
-    logger.info(
-        "Default ρ = %+.4f (Brier=%.4f, N=%d)", default_rho, default_loss, len(is_draw)
-    )
+    logger.info("Default ρ = %+.4f (Brier=%.4f, N=%d)", default_rho, default_loss, len(is_draw))
 
     by_bucket: dict[str, float] = {}
     for bucket, lids in buckets.items():
@@ -245,17 +243,11 @@ def fit_rho_per_bucket(
             )
             by_bucket[bucket] = default_rho
             continue
-        rho_b, loss_b = _fit_rho_brier(
-            lambdas_home[mask], lambdas_away[mask], is_draw[mask]
-        )
-        logger.info(
-            "Bucket %r ρ = %+.4f (Brier=%.4f, N=%d)", bucket, rho_b, loss_b, n
-        )
+        rho_b, loss_b = _fit_rho_brier(lambdas_home[mask], lambdas_away[mask], is_draw[mask])
+        logger.info("Bucket %r ρ = %+.4f (Brier=%.4f, N=%d)", bucket, rho_b, loss_b, n)
         by_bucket[bucket] = rho_b
 
-    return RhoConfig(
-        default=default_rho, by_bucket=by_bucket, league_to_bucket=league_to_bucket
-    )
+    return RhoConfig(default=default_rho, by_bucket=by_bucket, league_to_bucket=league_to_bucket)
 
 
 def save_rho_config(rho_config: RhoConfig, path: Path) -> None:

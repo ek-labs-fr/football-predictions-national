@@ -427,9 +427,7 @@ def predict_upcoming(mode: str) -> pd.DataFrame:
     feature_cols = get_feature_columns(train_df, mode=mode)
     medians = train_df[feature_cols].median()
 
-    model_home, model_away, scaler, rho_config, trained_at = _load_artefacts(
-        cfg.artefacts_prefix
-    )
+    model_home, model_away, scaler, rho_config, trained_at = _load_artefacts(cfg.artefacts_prefix)
     inf = io.read_parquet(cfg.inference_table)
 
     out = _materialise_predictions(
@@ -493,9 +491,7 @@ def predict_recent(mode: str, days: int = _RECENT_WINDOW_DAYS) -> pd.DataFrame:
         logger.info("[%s] recent: no FT fixtures in last %d days", mode, days)
         return recent
 
-    model_home, model_away, scaler, rho_config, trained_at = _load_artefacts(
-        cfg.artefacts_prefix
-    )
+    model_home, model_away, scaler, rho_config, trained_at = _load_artefacts(cfg.artefacts_prefix)
     out = _materialise_predictions(
         recent,
         feature_cols,
@@ -539,9 +535,7 @@ def predict_holdout(mode: str, decision_rule: str = _DECISION_RULE_VERSION) -> p
     _train_mask, test_mask = _make_holdout_masks(train_df, mode)
     holdout = train_df[test_mask].copy()
 
-    model_home, model_away, scaler, rho_config, _trained_at = _load_artefacts(
-        cfg.artefacts_prefix
-    )
+    model_home, model_away, scaler, rho_config, _trained_at = _load_artefacts(cfg.artefacts_prefix)
     out = _predict_rows(
         holdout,
         feature_cols,
