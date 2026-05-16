@@ -36,11 +36,15 @@ def simulate_tournament_endpoint(
         return model_store.predict(features)
 
     rng = np.random.default_rng(42)
+    # Tournament simulation is currently WC-only (league_id=1). Look up the
+    # competition-specific ρ rather than the cross-bucket default — for WC
+    # fixtures the WC bucket is what's calibrated against the WC draw rate.
+    rho = model_store.rho_config.lookup(1)
     result_df = simulate_tournament(
         groups=req.groups,
         get_lambdas=get_lambdas,
         n_sims=req.n_sims,
-        rho=model_store.rho,
+        rho=rho,
         rng=rng,
     )
 

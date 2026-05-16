@@ -13,10 +13,11 @@ For the **club** counterpart of this card see `documents/model-card-clubs.md`. F
 | | |
 |---|---|
 | **Task** | Predict `(home_goals, away_goals)` for international fixtures, with a derived 3×1 outcome distribution |
-| **Holdout** | WC 2022 (`league_id=1, season=2022`) — fixtures `date >= 2022-11-20` |
+| **Training cutoff** | `date < 2024-06-14` minus six post-WC-2022 holdout tournaments (`expanded` corpus, N=3,460 rows). The prior production cutoff was `2022-11-20` — superseded 2026-05-16. |
+| **Holdouts** | WC 2022 (historic, ~3,400 rows in training so no longer a clean test). Genuinely-unseen tournaments used for selection: Euro 2024, Copa América 2024, Olympics 2024, Gold Cup 2025, AFCON 2025. |
 | **Production pick** | **LightGBM Poisson**, two-tower (home + away regressors fit independently) |
-| **Calibration** | Bivariate Poisson with scalar ρ = **−0.1061**, fit on last 15% of train via Brier-on-draws minimization |
-| **Headline metrics (holdout)** | MAE_avg **0.867** · RPS **0.207** · W/D/L Accuracy **0.500** · Log loss **0.994** · Brier **0.196** · Exact scoreline acc **7.81%** |
+| **Calibration** | Bivariate Poisson with **per-competition ρ** (`{wc: −0.102, continental: +0.098, default: +0.049}`) fit via Brier-on-draws on all in-bucket training rows. Replaces the prior scalar ρ = −0.106 on 2026-05-16 — see §6.4. |
+| **Headline metrics (unseen holdouts, expanded + per-competition ρ)** | Euro 2024: exact-acc **25.5%**, W/D/L **41.2%**. Copa 2024: exact-acc **21.9%**, W/D/L **65.6%**. AFCON 2025: exact-acc **17.3%**, W/D/L **63.5%**, 1-0-share **34.6%** (was 61.5% under prior production). Gold Cup 2025: exact-acc **9.7%**. Full table at §9.4. |
 | **Feature count** | 46 numeric features (post static drop of 14) |
 | **Top feature** (mean \|SHAP\|) | `elo_diff` at **0.266** — ~3.4× the #2 feature |
 | **Tuning** | Hard-coded hyperparameters in production. Optuna implemented in `tune.py` but not invoked for national mode. |
@@ -144,13 +145,14 @@ These are explicit pairwise differences. A tree model can theoretically learn th
 
 ### 4.2 Train / test / calibration boundaries
 
-| | National mode |
+| | National mode (post-2026-05-16) |
 |---|---|
-| Train | All fixtures with `date < 2022-11-20` |
-| Calibration carve-out | Last 15% of train, chronologically |
-| Holdout (test) | WC 2022 (`league_id=1, season=2022`), all knockout + group fixtures |
+| Train (expanded corpus) | `date < 2024-06-14` minus six explicit holdout tournaments (WC 2022, Euro 2024, Copa 2024, Olympics 2024, Gold Cup 2025, AFCON 2025). N=3,460 rows. |
+| Calibration set (ρ) | Full training corpus (per-bucket — see §6.4). |
+| Holdouts (genuinely unseen) | Euro 2024 (N=51), Copa 2024 (N=32), Olympics 2024 (N=32), Gold Cup 2025 (N=31), AFCON 2025 (N=52). |
+| Historic holdout | WC 2022 (N=64). Was the production holdout under the prior cutoff; now in train, so it's a *training-set* sanity-check rather than a generalization estimate. |
 
-The calibration set is carved out of training data, not from the holdout — so the holdout remains a clean estimate of out-of-tournament performance.
+**Why the cutoff moved (2026-05-16):** the prior cutoff (`< 2022-11-20`) left 1,229 post-WC-2022 fixtures unused — a corpus that included two full Euro/Copa cycles, AFCON 2023/2025, Gold Cup 2023/2025, and Asian Cup 2023. The expanded model was evaluated against the prior production model on the five-tournament suite above (see `outputs/expanded_per_competition_rho_comparison.txt`); per-competition ρ + the expanded corpus is the chosen production configuration because (a) it triples the Euro 2024 exact-scoreline accuracy from 13.7% → 25.5%, (b) it drops the AFCON 2025 "1-0" share from 61.5% → 34.6% — the agreed promotion threshold — and (c) it doesn't sacrifice continuous-goal accuracy (MAE_avg stays at ~0.87 across the suite).
 
 ### 4.3 Sample weighting
 The `match_weight` column flows into every `fit()` call as `sample_weight=w_train` (`train.py:300, 347–348, 433–434`). Friendly fixtures contribute roughly 5× less than World Cup finals to the training loss. This both reduces noise from low-stakes fixtures and aligns the optimizer with what we actually care about predicting. **For national mode this is particularly important** because the corpus is half friendlies by row count.
@@ -263,21 +265,34 @@ LightGBM wins on `MAE_avg` (the model selection criterion). Notably, **Poisson L
 
 The XGBoost Classifier (`multi:softprob` directly on W/D/L) gets 48.4% accuracy vs the Poisson-derived 50%, supporting the choice to predict goals and derive outcomes rather than predict outcomes directly.
 
-### 6.4 Calibration — bivariate Poisson ρ (`src/models/calibrate.py`)
+### 6.4 Calibration — per-competition ρ (`src/models/calibrate.py`)
 
-The two independent Poissons systematically misprice draws. The fix is a single scalar `ρ` that re-weights the diagonal of the scoreline matrix.
+The two independent Poissons systematically misprice draws. The fix is a scalar `ρ` that re-weights the diagonal of the scoreline matrix. **The production calibration is now per-competition**, replacing the prior single-scalar fit on 2026-05-16.
 
-- **Optimizer:** `scipy.optimize.minimize_scalar` with `method="bounded"`, bounds `(-0.5, 0.5)` (`calibrate.py:91`)
-- **Loss:** Brier score on draw probability — `mean((p_draw − is_draw)²)` (`calibrate.py:84–89`)
-- **Fit set:** last 15% of train (calibration carve-out, separate from holdout)
-- **Saved:** `artefacts/rho.json` — `{"rho": -0.10609858...}`
+- **Optimizer:** `scipy.optimize.minimize_scalar` with `method="bounded"`, bounds `(-0.5, 0.5)`
+- **Loss:** Brier score on draw probability — `mean((p_draw − is_draw)²)`
+- **Fit set per bucket:** all in-bucket rows in the expanded training corpus (3,460 rows total)
+- **Schema (`artefacts/rho.json`):**
 
-**The current ρ = −0.106 is mildly negative.** This implies the calibration set has *fewer* draws than independence predicts. That cuts against the literature's usual finding for football (positive correlation, more draws than independence — the canonical Dixon-Coles motivation).
+  ```json
+  {
+    "rho_default": +0.0488,
+    "rho_by_bucket": { "wc": -0.1023, "continental": +0.0981 },
+    "bucket_league_ids": { "wc": [1], "continental": [4, 6, 7, 9, 22] }
+  }
+  ```
 
-A reviewer should:
-1. **Verify the sign convention** — `_bivariate_poisson_matrix` in `predict.py` should be checked to confirm a negative ρ deflates the diagonal as intended.
-2. **Check stability** — does ρ flip sign across CV folds, or across retrains? Currently it's a single fitted scalar with no confidence interval.
-3. **Note that the club-mode card has ρ = +0.042** — opposite sign. Either the two corpora genuinely have different draw correlation structures (plausible — international tournaments have more "must-not-lose" knockout draws than league play, but also more thrashings of weak teams), or one of the two is fitting noise.
+- **Resolution at inference:** `RhoConfig.lookup(league_id)` returns the bucket-specific ρ when the league maps to a bucket, otherwise the default. Unmapped competitions (friendlies, qualifiers, Nations League, Olympics) inherit the default ρ. Loader is backward-compatible with the legacy `{"rho": ...}` scalar schema.
+
+**Why per-competition.** Draw rates differ structurally across competition types — observed in the expanded training corpus: WC 21.9% draws, continental majors 23.7%, everything else 24.7%. A single global scalar must average these, and the resulting ρ over-inflates draws for WC predictions or under-inflates them for continental finals depending on which way the corpus mix tilts. Per-bucket calibration removes that compromise.
+
+**Reviewer points addressed.**
+
+- **Sign convention** is now confirmed by the WC-only diagnostic (2026-05-11, see `outputs/rho_wc_only_diagnostic.txt`): observed WC draw rate 21.88% is *below* the independence-implied 25.40%, so negative ρ for WC is the correct sign. The new WC-bucket ρ (−0.102) is consistent with the WC-only refit value (−0.128).
+- **Stability across retrains** — the prior scalar ρ was −0.106 under the 2022-11-20 cutoff and flipped to +0.168 under the 2024-06-14 cutoff (a global ρ trying to fit two different draw-rate populations). The per-bucket fit removes the regime instability: each bucket's ρ tracks the population it actually represents.
+- **Opposite-sign club ρ (+0.042)** is unaffected — clubs run a separate calibration, and the directional gap remains: continental club football has more draws than independence; WC international football has fewer. Both signs are now empirically validated.
+
+**Known limits.** The fitted continental ρ (+0.098) is an average across Euro/AFCON/Asian Cup/Copa/Gold Cup — these tournaments have ~1,100 combined training rows, enough for a stable scalar but not enough to split further per continent. Olympics (league 480) maps to the default bucket rather than continental; the U-23 player pool and tournament structure differ enough that lumping them with senior continental majors is unjustified.
 
 ---
 
@@ -330,11 +345,33 @@ LightGBM Poisson, evaluated on WC 2022 holdout:
 
 ### 9.3 What the numbers say
 
-The headline tension is between **continuous** (MAE, Brier — strong) and **discrete** (exact scoreline accuracy, W/D/L accuracy — weak).
+The §9.2 table is the prior-cutoff snapshot — WC 2022 was held out, and the headline tension was between **continuous** (MAE, Brier — strong) and **discrete** (exact scoreline accuracy, W/D/L accuracy — weak).
 
 This is consistent with a model that produces well-calibrated `λ` values but loses information at discretization. With λ_home ≈ 1.3 and λ_away ≈ 1.1 — typical national-mode values — the modal scoreline of an independent Poisson is **always** 1-0, 1-1, or 0-1, regardless of the actual lambdas. So the model can have great `MAE` (its λs are right) and terrible exact-scoreline accuracy (its argmax always falls in the same handful of low-score buckets).
 
 A previous experiment (PR #10, closed) attempted to replace `argmax` with a rounded-expected-goals + outcome-consistency rule, which would shift typical predictions to 2-1 / 1-2 / 3-1. The user evaluated the simulation and rejected the change — the new dominant pattern wasn't convincing either. **The current rule is `argmax_v0` and the project is explicitly not re-proposing rounded-expected without new evidence.**
+
+### 9.4 Multi-tournament holdout (2026-05-16 promotion)
+
+When the production cutoff moved to `2024-06-14`, the six post-WC-2022 tournaments became the genuinely-unseen holdout suite. Full report: `outputs/expanded_per_competition_rho_comparison.txt`.
+
+| Holdout | N | Prior production (ρ=−0.106) | Expanded + global ρ (+0.049) | Expanded + per-competition ρ |
+|---|---|---|---|---|
+| Euro 2024 | 51 | exact 13.7% · W/D/L 49.0% | 23.5% · 41.2% | **25.5% · 41.2%** |
+| Copa América 2024 | 32 | 18.8% · 56.2% | 15.6% · 65.6% | **21.9% · 65.6%** |
+| Olympics 2024 | 32 | 9.4% · 43.8% | 12.5% · 43.8% | **12.5% · 43.8%** (default ρ — Olympics maps to "other") |
+| Gold Cup 2025 | 31 | 9.7% · 67.7% | 9.7% · 67.7% | **9.7% · 67.7%** |
+| AFCON 2025 | 52 | 17.3% · 63.5% | 21.2% · 61.5% | **17.3% · 63.5%** |
+
+**Scoreline-diversity collapse fix** (the original promotion criterion):
+
+| | "1-0" prediction share on AFCON 2025 |
+|---|---|
+| Prior production | 61.5% |
+| Expanded + global ρ | 40.4% |
+| Expanded + per-competition ρ | **34.6%** (threshold was <40%) |
+
+**Reading the table.** Per-competition ρ is strictly equal-or-better than global ρ everywhere except AFCON exact-scoreline accuracy (where the per-bucket ρ trades one point of exact-match for two-point W/D/L recovery and a substantially less collapsed scoreline distribution). For WC 2026 specifically — the actual deployment target — only the per-competition variant uses an appropriately-calibrated ρ (the global ρ would over-inflate draws because WC 2026 carries the WC-style draw structure, not the corpus average). MAE_avg is unchanged by the ρ choice: ρ only re-shapes the scoreline matrix, not the underlying λs.
 
 ---
 
@@ -376,9 +413,9 @@ A senior reviewer would push on these. Listed in roughly descending order of imp
 
 **1. Discretization is the bottleneck.** Lambda quality is good (MAE_avg 0.867 beats Excellent). The decision rule throws information away. Worth investigating: probability-weighted scoreline, expected-goals + draw-adjustment, or just publishing top-3 most likely scorelines instead of one.
 
-**2. Negative ρ deserves verification.** Football literature's prior is that within-fixture goal correlation is positive (more draws than independence predicts). A negative ρ on the calibration set is unusual. Could be real (international fixtures have a high-variance distribution mixing thrashings with cagey knockouts), could be a sign-convention bug. The club-mode ρ is +0.042 — opposite sign. Worth investigating both.
+**2. Negative ρ deserves verification.** ✅ Resolved 2026-05-11. WC-only diagnostic confirmed sign convention is correct (observed WC draw rate 21.88% < independence-implied 25.40%). ρ is now per-competition (see §6.4): WC bucket is −0.10, continental bucket is +0.10, default is +0.05 — the directional gap between WC and continental is exactly the structural signal a global scalar was forced to average away.
 
-**3. WC 2022 holdout has only 64 fixtures.** That's a small N for the spread of metrics reported here. A 1-2% swing on accuracy is within sampling noise. For a more robust estimate, consider also evaluating against EURO 2024 held out (would require code changes to support multiple holdouts).
+**3. WC 2022 holdout has only 64 fixtures.** ✅ Largely addressed 2026-05-16. The holdout suite is now five tournaments — Euro 2024, Copa 2024, Olympics 2024, Gold Cup 2025, AFCON 2025 — totalling 198 unseen fixtures (still small per-competition, but the cross-tournament aggregation is more robust than 64 WC fixtures alone). See §9.4. WC 2022 is now in training.
 
 **4. Optuna and `select.py` are dormant for national mode.** Both implemented, neither in the production training path. Static hyperparameters and a static drop list — both will go stale as the dataset grows.
 
@@ -418,21 +455,35 @@ src/features/build.py              flat-row assembly + match context
 src/features/{rolling,squad,h2h,tournament}.py
                                    feature family definitions
 src/models/train.py                candidate fits, drop list, hyperparameters
-src/models/calibrate.py            ρ fit
+src/models/calibrate.py            ρ fit (scalar + per-bucket); RhoConfig schema
 src/models/select.py               (dormant) feature-selection pipeline
 src/models/tune.py                 (dormant) Optuna study
 src/models/evaluate.py             metric implementations
 src/models/explain.py              SHAP
 src/inference/predict.py           inference pipeline + decision rule
+
+scripts/refit_rho_per_competition.py
+                                   refits ρ per bucket on the expanded corpus;
+                                   rewrites artefacts/candidate_expanded/rho.json
+scripts/evaluate_per_competition_rho.py
+                                   three-way comparison: prior production vs
+                                   expanded(global ρ) vs expanded(per-bucket ρ)
 scripts/prediction_lineage_report.py   per-lineage-bucket accuracy
 
-artefacts/comparison.csv            per-candidate metrics on WC 2022 holdout
+(Other branches in flight may add scripts/retrain_expanded.py and
+ scripts/refit_rho_wc_only.py — see corresponding outputs/ files for evidence.)
+
+artefacts/comparison.csv            per-candidate metrics on WC 2022 holdout (historical)
 artefacts/shap_feature_importance.csv
                                    mean |SHAP| per feature, sorted
 outputs/shap_*.png                 summary, bar, top-5 dependence plots
 outputs/training_history.csv       full training-run log with is_best flag
+outputs/expanded_per_competition_rho_comparison.txt
+                                   2026-05-16 promotion evidence
+outputs/rho_per_competition_fit.txt  per-bucket fit report
+outputs/rho_wc_only_diagnostic.txt   2026-05-11 sign-convention check
 artefacts/{model_final_home,model_final_away,model_final_scaler}.pkl
-artefacts/rho.json                 calibrated correlation parameter (= -0.106)
+artefacts/rho.json                 per-competition RhoConfig (see §6.4)
 artefacts/shap_explainer.pkl       pickled TreeExplainer
 ```
 

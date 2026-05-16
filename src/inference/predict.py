@@ -42,7 +42,7 @@ import pandas as pd
 
 from src.features import io
 from src.inference.rationale import render_rationale
-from src.models.calibrate import _bivariate_poisson_matrix
+from src.models.calibrate import RhoConfig, _bivariate_poisson_matrix, load_rho_config
 from src.models.train import _make_holdout_masks, get_feature_columns
 
 logger = logging.getLogger(__name__)
@@ -134,14 +134,14 @@ def _load_pickle(key: str) -> object:
 
 def _load_artefacts(
     prefix: str,
-) -> tuple[object, object, object | None, float, str | None]:
+) -> tuple[object, object, object | None, RhoConfig, str | None]:
     model_home = _load_pickle(f"{prefix}/model_final_home.pkl")
     model_away = _load_pickle(f"{prefix}/model_final_away.pkl")
     scaler_key = f"{prefix}/model_final_scaler.pkl"
     scaler = _load_pickle(scaler_key) if io.exists(scaler_key) else None
-    rho = float(io.read_json(f"{prefix}/rho.json")["rho"])
+    rho_config = load_rho_config(io.read_json(f"{prefix}/rho.json"))
     model_trained_at = io.last_modified(f"{prefix}/model_final_home.pkl")
-    return model_home, model_away, scaler, rho, model_trained_at
+    return model_home, model_away, scaler, rho_config, model_trained_at
 
 
 # ------------------------------------------------------------------
@@ -190,7 +190,7 @@ def _predict_rows(
     model_home: object,
     model_away: object,
     scaler: object | None,
-    rho: float,
+    rho_config: RhoConfig,
     decision_rule: str = _DECISION_RULE_VERSION,
 ) -> pd.DataFrame:
     if decision_rule not in _DECISION_RULES:
@@ -205,11 +205,20 @@ def _predict_rows(
     lh = np.clip(model_home.predict(X_input), 0.01, 10.0)
     la = np.clip(model_away.predict(X_input), 0.01, 10.0)
 
+    league_ids = (
+        rows["league_id"].astype("Int64").tolist()
+        if "league_id" in rows.columns
+        else [None] * len(rows)
+    )
+
     scores: list[str] = []
+    rhos: list[float] = []
     p_h: list[float] = []
     p_d: list[float] = []
     p_a: list[float] = []
-    for h, a in zip(lh, la, strict=True):
+    for h, a, lid in zip(lh, la, league_ids, strict=True):
+        rho = rho_config.lookup(int(lid) if lid is not None and not pd.isna(lid) else None)
+        rhos.append(rho)
         mat = _bivariate_poisson_matrix(h, a, rho)
         ph = float(np.tril(mat, -1).sum())
         pd_ = float(np.trace(mat))
@@ -227,6 +236,7 @@ def _predict_rows(
     out["p_home_win"] = np.round(p_h, 4)
     out["p_draw"] = np.round(p_d, 4)
     out["p_away_win"] = np.round(p_a, 4)
+    out["rho_used"] = np.round(rhos, 4)
     probs = np.column_stack([p_h, p_d, p_a])
     out["predicted_outcome"] = [_OUTCOMES[i] for i in probs.argmax(axis=1)]
     return out
@@ -347,7 +357,7 @@ def _materialise_predictions(
     model_home: object,
     model_away: object,
     scaler: object | None,
-    rho: float,
+    rho_config: RhoConfig,
     backfill: bool,
     model_trained_at: str | None,
 ) -> pd.DataFrame:
@@ -372,7 +382,7 @@ def _materialise_predictions(
             model_home,
             model_away,
             scaler,
-            rho,
+            rho_config,
         )
         for _, p in predicted.iterrows():
             _store_prediction(
@@ -417,7 +427,7 @@ def predict_upcoming(mode: str) -> pd.DataFrame:
     feature_cols = get_feature_columns(train_df, mode=mode)
     medians = train_df[feature_cols].median()
 
-    model_home, model_away, scaler, rho, trained_at = _load_artefacts(cfg.artefacts_prefix)
+    model_home, model_away, scaler, rho_config, trained_at = _load_artefacts(cfg.artefacts_prefix)
     inf = io.read_parquet(cfg.inference_table)
 
     out = _materialise_predictions(
@@ -427,7 +437,7 @@ def predict_upcoming(mode: str) -> pd.DataFrame:
         model_home,
         model_away,
         scaler,
-        rho,
+        rho_config,
         backfill=False,
         model_trained_at=trained_at,
     )
@@ -456,7 +466,13 @@ def predict_upcoming(mode: str) -> pd.DataFrame:
     io.write_csv(cfg.legacy_csv, legacy)
     io.write_parquet(cfg.legacy_parquet, legacy)
 
-    logger.info("[%s] upcoming: %d rows (rho=%.4f)", mode, len(out), rho)
+    logger.info(
+        "[%s] upcoming: %d rows (rho_default=%.4f, buckets=%s)",
+        mode,
+        len(out),
+        rho_config.default,
+        sorted(rho_config.by_bucket) if rho_config.by_bucket else "scalar",
+    )
     return out
 
 
@@ -475,7 +491,7 @@ def predict_recent(mode: str, days: int = _RECENT_WINDOW_DAYS) -> pd.DataFrame:
         logger.info("[%s] recent: no FT fixtures in last %d days", mode, days)
         return recent
 
-    model_home, model_away, scaler, rho, trained_at = _load_artefacts(cfg.artefacts_prefix)
+    model_home, model_away, scaler, rho_config, trained_at = _load_artefacts(cfg.artefacts_prefix)
     out = _materialise_predictions(
         recent,
         feature_cols,
@@ -483,7 +499,7 @@ def predict_recent(mode: str, days: int = _RECENT_WINDOW_DAYS) -> pd.DataFrame:
         model_home,
         model_away,
         scaler,
-        rho,
+        rho_config,
         backfill=True,
         model_trained_at=trained_at,
     )
@@ -519,7 +535,7 @@ def predict_holdout(mode: str, decision_rule: str = _DECISION_RULE_VERSION) -> p
     _train_mask, test_mask = _make_holdout_masks(train_df, mode)
     holdout = train_df[test_mask].copy()
 
-    model_home, model_away, scaler, rho, _trained_at = _load_artefacts(cfg.artefacts_prefix)
+    model_home, model_away, scaler, rho_config, _trained_at = _load_artefacts(cfg.artefacts_prefix)
     out = _predict_rows(
         holdout,
         feature_cols,
@@ -527,7 +543,7 @@ def predict_holdout(mode: str, decision_rule: str = _DECISION_RULE_VERSION) -> p
         model_home,
         model_away,
         scaler,
-        rho,
+        rho_config,
         decision_rule=decision_rule,
     )
     out["rationale"] = _compute_rationales_for_rows(
