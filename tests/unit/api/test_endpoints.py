@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from src.api.dependencies import FeatureStore, ModelStore, get_feature_store, get_model_store
 from src.api.main import app
+from src.models.calibrate import RhoConfig
 
 # ------------------------------------------------------------------
 # Fixtures
@@ -23,7 +24,7 @@ def _mock_model_store(loaded: bool = True) -> ModelStore:
     store.model_home.predict.return_value = np.array([1.5])
     store.model_away.predict.return_value = np.array([1.2])
     store.scaler = None
-    store.rho = 0.05
+    store.rho_config = RhoConfig(default=0.05)
     store.selected_features = ["f1", "f2"]
     return store
 

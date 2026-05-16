@@ -11,6 +11,8 @@ from typing import Any
 import joblib
 import numpy as np  # noqa: TCH002
 
+from src.models.calibrate import RhoConfig, load_rho_config
+
 logger = logging.getLogger(__name__)
 
 ARTEFACTS_DIR = Path("artefacts")
@@ -25,9 +27,14 @@ class ModelStore:
         self.model_home: Any = None
         self.model_away: Any = None
         self.scaler: Any = None
-        self.rho: float = 0.0
+        self.rho_config: RhoConfig = RhoConfig(default=0.0)
         self.selected_features: list[str] = []
         self.loaded = False
+
+    @property
+    def rho(self) -> float:
+        """Default (cross-bucket) ρ — kept for callers that need a scalar."""
+        return self.rho_config.default
 
     def load(self) -> None:
         """Load all model artefacts from disk."""
@@ -59,9 +66,16 @@ class ModelStore:
             logger.info("Loaded scaler")
 
         if rho_path.exists():
-            data = json.loads(rho_path.read_text(encoding="utf-8"))
-            self.rho = data.get("rho", 0.0)
-            logger.info("Loaded ρ = %.4f", self.rho)
+            payload = json.loads(rho_path.read_text(encoding="utf-8"))
+            self.rho_config = load_rho_config(payload)
+            if self.rho_config.by_bucket:
+                logger.info(
+                    "Loaded RhoConfig (default=%.4f, buckets=%s)",
+                    self.rho_config.default,
+                    {b: round(v, 4) for b, v in self.rho_config.by_bucket.items()},
+                )
+            else:
+                logger.info("Loaded ρ = %.4f (scalar)", self.rho_config.default)
 
         if features_path.exists():
             self.selected_features = joblib.load(features_path)
